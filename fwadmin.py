@@ -29,6 +29,7 @@ class IPDatabase:
         # Initialize Database
         db_path = Path("database") / db_name
         self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
         self._create_table()
 
     def _create_table(self):
@@ -71,16 +72,29 @@ class IPDatabase:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         user = getpass.getuser()
 
-        with self.conn:
-            self.conn.execute("""
-                              INSERT INTO audit_history (event_type, target_cidr, user, incident_id, comment, timestamp)
-                              VALUES (?, ?, ?, ?, ?, ?)
-                              """, (event_type, target_cidr, user, incident_id, comment, timestamp))
+        # Create the named mapping
+        log_data = {
+            "event_type": event_type,
+            "target": target_cidr,
+            "user": user,
+            "inc": incident_id,
+            "msg": comment,
+            "ts": timestamp
+        }
 
-        self.logger.info(
-            f"ACTION: {event_type} | TARGET: {target_cidr} | ID: {incident_id} | COMMENT: {comment}",
-            extra={'user': user}
-        )
+        try:
+            with self.conn:
+                self.conn.execute("""
+                                  INSERT INTO audit_history (event_type, target_cidr, user, incident_id, comment, timestamp)
+                                  VALUES (:event_type, :target, :user, :inc, :msg, :ts)
+                                  """, log_data)
+
+            self.logger.info(
+                f"ACTION: {event_type} | TARGET: {target_cidr} | ID: {incident_id} | COMMENT: {comment}",
+                extra={'user': user}
+            )
+        except Exception as e:
+            print(f"[-] AUDIT LOGGING ERROR: {e}")
 
     def parse_inputs(self):
         inc_id = input("\nEnter Incident/Ticket ID: ").strip()
@@ -112,50 +126,78 @@ class IPDatabase:
         try:
             net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
             current_user = getpass.getuser()
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # CONFLICT CHECK
-            other_p = 'ALLOW' if policy == 'BLOCK' else 'BLOCK'
+            # Determine opposite policy for conflict checks without overwriting 'policy'
+            other_policy = 'ALLOW' if policy == 'BLOCK' else 'BLOCK'
+
+            # Unified data dictionary for named placeholders
+            params = {
+                "version": version,
+                "start_blob": start,
+                "end_blob": end,
+                "policy": policy,
+                "other_policy": other_policy,
+                "orig": ip_input,
+                "cidr": cidr_val,
+                "inc": inc_id,
+                "ts": ts,
+                "user": current_user
+            }
+
+            # CONFLICT CHECK (Checking against the OPPOSITE policy)
             conflict = self.conn.execute("""
-                SELECT cidr, incident_id, added_by
-                FROM ip_ranges
-                WHERE version = ? AND start_blob <= ? AND end_blob >= ?
-                  AND policy = ? AND is_redundant = 0
-            """, (version, start, end, other_p)).fetchone()
+                                         SELECT cidr
+                                         FROM ip_ranges
+                                         WHERE version = :version
+                                           AND start_blob <= :start_blob
+                                           AND end_blob >= :end_blob
+                                           AND policy = :other_policy
+                                           AND is_redundant = 0
+                                         """, params).fetchone()
 
-            # Inside add_entry method
             if conflict:
-                print(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_p} rule ({conflict[0]})")
+                # Safer access using the column name 'cidr'
+                print(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict['cidr']})")
                 if input(f"Confirm adding this {policy} exception? (y/n): ").lower() != 'y':
                     return
 
-            # REDUNDANCY CHECK
+            # REDUNDANCY CHECK (Checking against the SAME policy)
             existing = self.conn.execute("""
-                SELECT cidr FROM ip_ranges
-                WHERE version = ? AND start_blob <= ? AND end_blob >= ?
-                  AND policy = ? AND is_redundant = 0
-            """, (version, start, end, policy)).fetchone()
+                                         SELECT cidr
+                                         FROM ip_ranges
+                                         WHERE version = :version
+                                           AND start_blob <= :start_blob
+                                           AND end_blob >= :end_blob
+                                           AND policy = :policy
+                                           AND is_redundant = 0
+                                         """, params).fetchone()
 
             if existing:
-                print(f"\n{ip_input} is already covered by active range: {existing[0]}")
+                print(f"\n{ip_input} is already covered by active range: {existing['cidr']}")
                 return
-
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             with self.conn:
                 # Mark smaller ranges as redundant
                 cursor = self.conn.execute("""
-                    UPDATE ip_ranges SET is_redundant = 1
-                    WHERE version = ? AND start_blob >= ? AND end_blob <= ? AND policy = ?
-                """, (version, start, end, policy))
+                                           UPDATE ip_ranges
+                                           SET is_redundant = 1
+                                           WHERE version = :version
+                                             AND start_blob >= :start_blob
+                                             AND end_blob <= :end_blob
+                                             AND policy = :policy
+                                           """, params)
 
                 if cursor.rowcount > 0:
                     print(f"Optimization: {cursor.rowcount} existing ranges marked redundant.")
 
+                # INSERT using named placeholders
                 self.conn.execute("""
-                    INSERT INTO ip_ranges
-                    (original_input, cidr, version, start_blob, end_blob, incident_id, created_at, policy, added_by)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (ip_input, cidr_val, version, start, end, inc_id, ts, policy, current_user))
+                                  INSERT INTO ip_ranges
+                                  (original_input, cidr, version, start_blob, end_blob, incident_id, created_at, policy,
+                                   added_by)
+                                  VALUES (:orig, :cidr, :version, :start_blob, :end_blob, :inc, :ts, :policy, :user)
+                                  """, params)
 
             print(f"SUCCESS: {policy} rule for {cidr_val} committed.")
             self._log_event(f"ADDED {policy}", cidr_val, inc_id, comment)
@@ -171,15 +213,21 @@ class IPDatabase:
             # Get Incident and Comment for the audit trail
             inc_id, comment = self.parse_inputs()
 
+            params = {
+                'version': version,
+                'start_blob': start,
+                'end_blob': end
+            }
+
             # Identify children that would be "un-swallowed"
             to_restore = self.conn.execute("""
                                            SELECT original_input, incident_id, added_by
                                            FROM ip_ranges
-                                           WHERE version = ?
-                                             AND start_blob >= ?
-                                             AND end_blob <= ?
+                                           WHERE version = :version
+                                             AND start_blob >= :start_blob
+                                             AND end_blob <= :end_blob
                                              AND is_redundant = 1
-                                           """, (version, start, end)).fetchall()
+                                           """, params).fetchall()
 
             if dry_run:
                 print(f"\n[DRY RUN] Removing: {cidr_val}")
@@ -188,19 +236,29 @@ class IPDatabase:
                 return
 
             with self.conn:
+                params = {
+                    'incident_id': inc_id,
+                    'version': version,
+                    'start_blob': start,
+                    'end_blob': end
+                }
+
                 # Update restored children to the NEW Incident ID authorizing their reactivation
                 self.conn.execute("""
                                   UPDATE ip_ranges
                                   SET is_redundant = 0,
-                                      incident_id  = ?
-                                  WHERE version = ?
-                                    AND start_blob >= ?
-                                    AND end_blob <= ?
+                                      incident_id  = :incident_id
+                                  WHERE version = :version
+                                    AND start_blob >= :start_blob
+                                    AND end_blob <= :end_blob
                                     AND is_redundant = 1
-                                  """, (inc_id, version, start, end))
+                                  """, params)
 
                 # Remove the actual record
-                c = self.conn.execute("DELETE FROM ip_ranges WHERE cidr = ?", (cidr_val,))
+                params = {
+                    'cidr': cidr_val,
+                }
+                c = self.conn.execute("DELETE FROM ip_ranges WHERE cidr = :cidr", params)
 
                 if c.rowcount > 0:
                     # Log to database and text file
@@ -225,8 +283,8 @@ class IPDatabase:
                 params.append(cutoff)
 
             # Confirm with count first
-            count_query = query.replace("DELETE", "SELECT COUNT(*)")
-            total_to_purge = self.conn.execute(count_query, params).fetchone()[0]
+            count_query = query.replace("DELETE", "SELECT COUNT(*) as total")
+            total_to_purge = self.conn.execute(count_query, params).fetchone()['total']
 
             if total_to_purge == 0:
                 print("\nNo redundant records found to purge.")
@@ -249,24 +307,27 @@ class IPDatabase:
     def search_ip(self, search_ip):
         try:
             ip_obj = ipaddress.ip_address(search_ip)
-            results = self.conn.execute("""
-                                        SELECT policy, original_input, added_by, created_at, incident_id, is_redundant
-                                        FROM ip_ranges
-                                        WHERE version = ?
-                                          AND ? BETWEEN start_blob AND end_blob
-                                        ORDER BY created_at DESC
-                                        """, (ip_obj.version, ip_obj.packed)).fetchall()
+
+            # Search using named placeholder :val
+            query = """
+                    SELECT *
+                    FROM ip_ranges
+                    WHERE version = :ver
+                      AND :packed BETWEEN start_blob AND end_blob
+                    ORDER BY created_at DESC
+                    """
+            params = {"ver": ip_obj.version, "packed": ip_obj.packed}
+            results = self.conn.execute(query, params).fetchall()
 
             if results:
                 print(f"\n--- Full Audit Report for {search_ip} ---")
                 for r in results:
-                    # Mapping based on the SELECT order above:
-                    # 0:policy, 1:orig, 2:author, 3:date, 4:id, 5:redundant
-                    status = "[REDUNDANT]" if r[5] == 1 else "[ACTIVE]"
-                    print(f" POLICY: {r[0]} {status}")
-                    print(f" RANGE:  {r[1]}")
-                    print(f" AUTHOR: {r[2]} | DATE: {r[3]}")
-                    print(f" ID:     {r[4]}\n")
+                    # Accessing by column name via sqlite3.Row
+                    status = "[REDUNDANT]" if r['is_redundant'] == 1 else "[ACTIVE]"
+                    print(f" POLICY: {r['policy']} {status}")
+                    print(f" RANGE:  {r['cidr']}")
+                    print(f" AUTHOR: {r['added_by']} | DATE: {r['created_at']}")
+                    print(f" ID:     {r['incident_id']}\n")
             else:
                 print(f"\n[-] NO MATCH: The address {search_ip} is not covered by any policy.")
         except Exception as e:
@@ -275,15 +336,23 @@ class IPDatabase:
     def export_lists(self):
         for p in ['BLOCK', 'ALLOW']:
             fname = f"ip_{p.lower()}list.txt"
+
+            params = {
+                'policy': p
+            }
+
             rows = self.conn.execute("""
-                SELECT cidr FROM ip_ranges
-                WHERE policy = ? AND is_redundant = 0
-                ORDER BY version ASC, start_blob ASC
-            """, (p,)).fetchall()
+                SELECT cidr 
+                FROM ip_ranges
+                WHERE policy = :policy
+                  AND is_redundant = 0
+                ORDER BY version ASC, 
+                         start_blob ASC
+            """, params).fetchall()
 
             with open(Path("rules") / fname, "w") as f:
                 for r in rows:
-                    f.write(f"{r[0]}\n")
+                    f.write(f"{r['cidr']}\n")
             print(f"[+] EXPORTED: {len(rows)} rules to {fname}")
 
     def dump_to_screen(self):
@@ -306,9 +375,8 @@ class IPDatabase:
         print("-" * 96)
 
         for r in rows:
-            policy, cidr, created_at, author, incident = r
             # Using f-string padding (<18 means 18 characters wide, left-aligned)
-            print(f"{policy:<6} | {cidr:<38} | {created_at:19} | {author:<12} | {incident}")
+            print(f"{r['policy']:<6} | {r['cidr']:<38} | {r['created_at']:19} | {r['added_by']:<12} | {r['incident_id']}")
 
         print("-" * 96 + "\n")
 
