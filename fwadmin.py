@@ -96,6 +96,27 @@ class IPDatabase:
         except Exception as e:
             print(f"[-] AUDIT LOGGING ERROR: {e}")
 
+    def _get_parent_range(self, version, start, end, policy):
+        """Returns the CIDR of an active range that covers the provided range."""
+        params = {
+            "v": version,
+            "s": start,
+            "e": end,
+            "p": policy
+        }
+
+        query = """
+                SELECT cidr \
+                FROM ip_ranges
+                WHERE version = :v \
+                  AND start_blob <= :s \
+                  AND end_blob >= :e
+                  AND policy = :p \
+                  AND is_redundant = 0
+                """
+        result = self.conn.execute(query, params).fetchone()
+        return result['cidr'] if result else None
+
     def parse_inputs(self):
         inc_id = input("\nEnter Incident/Ticket ID: ").strip()
         comment = input("Enter Operator Comment: ").strip()
@@ -146,35 +167,19 @@ class IPDatabase:
             }
 
             # CONFLICT CHECK (Checking against the OPPOSITE policy)
-            conflict = self.conn.execute("""
-                                         SELECT cidr
-                                         FROM ip_ranges
-                                         WHERE version = :version
-                                           AND start_blob <= :start_blob
-                                           AND end_blob >= :end_blob
-                                           AND policy = :other_policy
-                                           AND is_redundant = 0
-                                         """, params).fetchone()
+            conflict = self._get_parent_range(version, start, end, other_policy)
 
             if conflict:
                 # Safer access using the column name 'cidr'
-                print(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict['cidr']})")
+                print(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict})")
                 if input(f"Confirm adding this {policy} exception? (y/n): ").lower() != 'y':
                     return
 
             # REDUNDANCY CHECK (Checking against the SAME policy)
-            existing = self.conn.execute("""
-                                         SELECT cidr
-                                         FROM ip_ranges
-                                         WHERE version = :version
-                                           AND start_blob <= :start_blob
-                                           AND end_blob >= :end_blob
-                                           AND policy = :policy
-                                           AND is_redundant = 0
-                                         """, params).fetchone()
+            existing = self._get_parent_range(version, start, end, policy)
 
             if existing:
-                print(f"\n{ip_input} is already covered by active range: {existing['cidr']}")
+                print(f"\n{ip_input} is already covered by active range: {existing}")
                 return
 
             with self.conn:
