@@ -433,6 +433,19 @@ def main():
     subparsers.add_parser("dump", help="Display all active entries on screen as CSV")
 
     args = parser.parse_args()
+
+    #  Validation
+    try:
+        ipaddress.ip_address(args.target)
+    except ValueError:
+        print("Invalid IP or CIDR entered")
+        exit(0)
+
+    # Do not block private IPs
+    if ipaddress.IPv4Address(args.target).is_global is False:
+        print("private IP, won't take action")
+        exit(0)
+        
     db = IPDatabase()
 
     if args.command in [ "block", "deny" ]:
