@@ -117,6 +117,20 @@ class IPDatabase:
         result = self.conn.execute(query, params).fetchone()
         return result['cidr'] if result else None
 
+    def is_input_ip_address(self, input):
+        try:
+            return ipaddress.ip_network(input, strict=False)
+        except ValueError:
+            return False
+
+    def is_ip_address_routable(self, ip_input):
+        try:
+            # This handles IPv4, IPv6, and CIDR ranges automatically
+            net = ipaddress.ip_network(ip_input, strict=False)
+            return net.is_global
+        except ValueError:
+            return False
+
     def parse_inputs(self):
         inc_id = input("\nEnter Incident/Ticket ID: ").strip()
         comment = input("Enter Operator Comment: ").strip()
@@ -434,19 +448,13 @@ def main():
 
     args = parser.parse_args()
 
-    #  Validation
-    try:
-        ipaddress.ip_address(args.target)
-    except ValueError:
-        print("Invalid IP or CIDR entered")
-        exit(0)
-
-    # Do not block private IPs
-    if ipaddress.IPv4Address(args.target).is_global is False:
-        print("private IP, won't take action")
-        exit(0)
-        
     db = IPDatabase()
+
+    # Validation
+    if db.is_input_ip_address(args.target) is False:
+        exit("Invalid IP or CIDR entered")
+    if db.is_ip_address_routable(args.target) is False:
+        exit("Non-routable IP or CIDR entered, exiting...")
 
     if args.command in [ "block", "deny" ]:
         incident_id, comment = db.parse_inputs()
