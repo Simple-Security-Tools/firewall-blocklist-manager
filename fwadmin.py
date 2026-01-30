@@ -7,10 +7,14 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
-
+from dotenv import dotenv_values
 
 class IPDatabase:
     def __init__(self, db_name="ip_manager.db"):
+        self.config = dotenv_values("config.env")
+
+        self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
+
         # Ensure required directories exist
         Path("database").mkdir(exist_ok=True)
         Path("logs").mkdir(exist_ok=True)
@@ -162,6 +166,10 @@ class IPDatabase:
             net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
             current_user = getpass.getuser()
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Safety Gate: Stop execution if ALLOW is attempted in DENY_MODE
+            if self.deny_mode and policy == "allow":
+                sys.exit("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")  #
 
             # Determine opposite policy for conflict checks without overwriting 'policy'
             other_policy = 'ALLOW' if policy == 'BLOCK' else 'BLOCK'
@@ -424,54 +432,76 @@ class IPDatabase:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Simple Firewall Blocklist Manager")
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    # Custom Help Text Block
+    custom_help = """
+Firewall Admin Tool (FWAdmin)
+=========================================
+Usage: python fwadmin.py COMMAND [TARGET]
 
-    # Add/Search Commands
-    for cmd in ["block", "deny", "allow", "search"]:
+Commands:
+  allow  (x.x.x.x)    Allows an IP or CIDR range
+  block  (x.x.x.x)    Blocks an IP or CIDR range
+  deny   (x.x.x.x)    Alias for block
+  search (x.x.x.x)    Check if an IP is in the database
+  remove (x.x.x.x)    Remove a rule and restore children
+
+  export              Export active rules to text files
+  report              Generate a full CSV audit report
+  dump                Display active rules on screen
+  purge               Clear redundant records from DB
+
+Note:
+  The "allow" command can be disabled in order to maintain compatibility with Entra Conditional Access Policy block lists
+
+Examples:
+  python fwadmin.py block 1.2.3.4
+  python fwadmin.py allow 10.0.0.0/24
+  python fwadmin.py report
+    """
+
+    # 2. Add add_help=False to stop argparse from auto-generating help
+    parser = argparse.ArgumentParser(add_help=False)
+
+    # Manually handle -h/--help to print your block
+    parser.add_argument("-h", "--help", action="store_true")
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Setup the commands (keeping argument logic intact)
+    for cmd in ["block", "deny", "allow", "search", "remove"]:
         p = subparsers.add_parser(cmd)
-        p.add_argument("target", help="The IP or CIDR to process")
+        p.add_argument("target")
 
-    # Remove Command
-    rem = subparsers.add_parser("remove")
-    rem.add_argument("target", help="Exact IP/CIDR to remove")
-    rem.add_argument("--dry-run", action="store_true", help="Analyze child restoration without deleting")
+    subparsers.add_parser("export")
+    subparsers.add_parser("report")
+    subparsers.add_parser("dump")
 
-    # Purge Command
     purge = subparsers.add_parser("purge")
-    purge.add_argument("--days", type=int, help="Purge redundant records older than X days")
-
-    # Utility Commands
-    subparsers.add_parser("export", help="Export active rules to .txt files")
-    subparsers.add_parser("report", help="Generate full CSV database audit")
-    subparsers.add_parser("dump", help="Display all active entries on screen as CSV")
+    purge.add_argument("--days", type=int)
 
     args = parser.parse_args()
 
+    # Check for help flag OR no command
+    if args.help or not args.command:
+        print(custom_help)
+        sys.exit(0)
+
     db = IPDatabase()
 
-    # Validation
-    if db.is_input_ip_address(args.target) is False:
-        exit("Invalid IP or CIDR entered")
-    if db.is_ip_address_routable(args.target) is False:
-        exit("Non-routable IP or CIDR entered, exiting...")
+    # Validation and routing (same as your logic)
+    if args.command in ["block", "deny", "allow", "search", "remove"]:
+        if db.is_input_ip_address(args.target) is False:
+            sys.exit("[-] Invalid IP or CIDR")
+        if args.command != "search" and db.is_ip_address_routable(args.target) is False:
+            sys.exit("[-] Non-routable IP")
 
-    if args.command in [ "block", "deny" ]:
-        incident_id, comment = db.parse_inputs()
-        db.add_entry(
-            args.target,
-            policy='BLOCK',
-            inc_id=incident_id,
-            comment=comment
-        )
+    # Command Routing
+    if args.command in ["block", "deny"]:
+        inc, msg = db.parse_inputs()
+        db.add_entry(args.target, policy='BLOCK', inc_id=inc, comment=msg)
     elif args.command == "allow":
-        incident_id, comment = db.parse_inputs()
-        db.add_entry(
-            args.target,
-            policy='ALLOW',
-            inc_id=incident_id,
-            comment=comment
-        )
+        inc, msg = db.parse_inputs()
+        db.add_entry(args.target, policy='ALLOW', inc_id=inc, comment=msg)
     elif args.command == "remove":
         db.remove_entry(args.target, dry_run=args.dry_run)
     elif args.command == "purge":
@@ -485,7 +515,7 @@ def main():
     elif args.command == "dump":
         db.dump_to_screen()
     else:
-        parser.print_help()
+        print(custom_help)
 
 
 if __name__ == "__main__":
