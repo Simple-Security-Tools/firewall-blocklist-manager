@@ -48,10 +48,11 @@ class IPDatabase:
                               start_blob BLOB,
                               end_blob BLOB,
                               incident_id TEXT,
-                              created_at TIMESTAMP,
                               is_redundant INTEGER DEFAULT 0,
                               policy TEXT DEFAULT 'BLOCK',
-                              added_by TEXT
+                              created_by TEXT,
+                              created_at TIMESTAMP,
+                              expires_at TIMESTAMP
                           );
                           """)
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_range ON ip_ranges (version, start_blob, end_blob, policy);")
@@ -106,7 +107,9 @@ class IPDatabase:
             "v": version,
             "s": start,
             "e": end,
-            "p": policy
+            "p": policy,
+            "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         }
 
         query = """
@@ -117,6 +120,7 @@ class IPDatabase:
                   AND end_blob >= :e
                   AND policy = :p \
                   AND is_redundant = 0
+                  AND (expires_at > :now OR expires_at IS NULL)
                 """
         result = self.conn.execute(query, params).fetchone()
         return result['cidr'] if result else None
@@ -138,8 +142,39 @@ class IPDatabase:
     def parse_inputs(self):
         inc_id = input("\nEnter Incident/Ticket ID: ").strip()
         comment = input("Enter Operator Comment: ").strip()
+        expires_at = self.expiration_date_prompt()
 
-        return inc_id, comment
+        return inc_id, comment, expires_at
+
+    def expiration_date_prompt(self):
+        now = datetime.now()
+        default_expiry_days = int(self.config.get("DEFAULT_EXPIRY", 30))
+        max_expiry_days = int(self.config.get("MAX_EXPIRY", 31))
+
+        user_input = input(
+            f"Enter expiration days (0–{max_expiry_days}, 0=indefinite) "
+            f"[{default_expiry_days}]: "
+        ).strip()
+
+        # Handle empty input (use default)
+        if user_input == "":
+            expiry_days = default_expiry_days
+        else:
+            try:
+                expiry_days = int(user_input)
+            except ValueError:
+                print("Invalid input: must be an integer")
+                sys.exit(1)
+
+        # Validation + behavior
+        if expiry_days == 0:
+            expires_at = "9999-09-09 00:00:00"
+        elif 1 <= expiry_days <= max_expiry_days:
+            expires_at = (now + timedelta(days=expiry_days)).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            raise SystemExit(f"Expiration days must be between 1 and {max_expiry_days} OR 0 for indefinite")
+
+        return expires_at
 
     def normalize_cidr(self, ip_input):
         """
@@ -161,14 +196,14 @@ class IPDatabase:
         cidr_val = str(net)
         return net, net.version, net.network_address.packed, net.broadcast_address.packed, cidr_val
 
-    def add_entry(self, ip_input, inc_id='N/A', comment='', policy='BLOCK'):
+    def add_entry(self, ip_input, inc_id='N/A', comment='', expires_at=None, policy='BLOCK'):
         try:
             net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
             current_user = getpass.getuser()
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # Safety Gate: Stop execution if ALLOW is attempted in DENY_MODE
-            if self.deny_mode and policy == "allow":
+            if self.deny_mode and policy.upper() == "ALLOW":
                 sys.exit("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")  #
 
             # Determine opposite policy for conflict checks without overwriting 'policy'
@@ -184,8 +219,9 @@ class IPDatabase:
                 "orig": ip_input,
                 "cidr": cidr_val,
                 "inc": inc_id,
-                "ts": ts,
-                "user": current_user
+                "created_by": current_user,
+                "created_at": created_at,
+                "expires_at": expires_at
             }
 
             # CONFLICT CHECK (Checking against the OPPOSITE policy)
@@ -221,18 +257,17 @@ class IPDatabase:
                 # INSERT using named placeholders
                 self.conn.execute("""
                                   INSERT INTO ip_ranges
-                                  (original_input, cidr, version, start_blob, end_blob, incident_id, created_at, policy,
-                                   added_by)
-                                  VALUES (:orig, :cidr, :version, :start_blob, :end_blob, :inc, :ts, :policy, :user)
+                                  (original_input, cidr, version, start_blob, end_blob, incident_id, policy, created_by, created_at, expires_at)
+                                  VALUES (:orig, :cidr, :version, :start_blob, :end_blob, :inc, :policy, :created_by, :created_at, :expires_at)
                                   """, params)
 
             print(f"SUCCESS: {policy} rule for {cidr_val} committed.")
-            self._log_event(f"ADDED {policy}", cidr_val, inc_id, comment)
+            self._log_event(f"ADDED {policy} {cidr_val} {inc_id} expires: {expires_at} \"{comment}\"", cidr_val, inc_id, comment)
 
         except Exception as e:
             print(f"[-] ERROR: {e}")
 
-    def remove_entry(self, ip_input, dry_run=False):
+    def remove_entry(self, ip_input):
         try:
             # Normalize input to find the correct record
             net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
@@ -248,19 +283,13 @@ class IPDatabase:
 
             # Identify children that would be "un-swallowed"
             to_restore = self.conn.execute("""
-                                           SELECT original_input, incident_id, added_by
+                                           SELECT original_input, incident_id, created_by
                                            FROM ip_ranges
                                            WHERE version = :version
                                              AND start_blob >= :start_blob
                                              AND end_blob <= :end_blob
                                              AND is_redundant = 1
                                            """, params).fetchall()
-
-            if dry_run:
-                print(f"\n[DRY RUN] Removing: {cidr_val}")
-                if to_restore:
-                    print(f"This will ACTIVATE {len(to_restore)} children with new INC ID: {inc_id}")
-                return
 
             with self.conn:
                 params = {
@@ -335,15 +364,21 @@ class IPDatabase:
         try:
             ip_obj = ipaddress.ip_address(search_ip)
 
+            params = {
+                "ver": ip_obj.version,
+                "packed": ip_obj.packed
+                "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
             # Search using named placeholder :val
             query = """
                     SELECT *
                     FROM ip_ranges
                     WHERE version = :ver
                       AND :packed BETWEEN start_blob AND end_blob
+                      AND (expires_at > :now OR expires_at IS NULL)
                     ORDER BY created_at DESC
                     """
-            params = {"ver": ip_obj.version, "packed": ip_obj.packed}
             results = self.conn.execute(query, params).fetchall()
 
             if results:
@@ -353,7 +388,9 @@ class IPDatabase:
                     status = "[REDUNDANT]" if r['is_redundant'] == 1 else "[ACTIVE]"
                     print(f" POLICY: {r['policy']} {status}")
                     print(f" RANGE:  {r['cidr']}")
-                    print(f" AUTHOR: {r['added_by']} | DATE: {r['created_at']}")
+                    print(f" AUTHOR: {r['created_by']}")
+                    print(f" CREATED: {r['created_at']}")
+                    print(f" EXPIRES: {r['expires_at']}")
                     print(f" ID:     {r['incident_id']}\n")
             else:
                 print(f"\n[-] NO MATCH: The address {search_ip} is not covered by any policy.")
@@ -363,47 +400,56 @@ class IPDatabase:
     def export_lists(self):
         for p in ['BLOCK', 'ALLOW']:
             fname = f"ip_{p.lower()}list.txt"
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             params = {
-                'policy': p
+                'policy': p,
+                'now': now
             }
 
+            # Updated query to check for expiration
             rows = self.conn.execute("""
-                SELECT cidr 
-                FROM ip_ranges
-                WHERE policy = :policy
-                  AND is_redundant = 0
-                ORDER BY version ASC, 
-                         start_blob ASC
-            """, params).fetchall()
+                                     SELECT cidr
+                                     FROM ip_ranges
+                                     WHERE policy = :policy
+                                       AND is_redundant = 0
+                                       AND (expires_at > :now OR expires_at IS NULL)
+                                     ORDER BY version ASC,
+                                              start_blob ASC
+                                     """, params).fetchall()
 
             with open(Path("rules") / fname, "w") as f:
                 for r in rows:
                     f.write(f"{r['cidr']}\n")
             print(f"[+] EXPORTED: {len(rows)} rules to {fname}")
 
-    def dump_to_screen(self):
+    def list_active(self):
+        params = {
+            'now': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
         rows = self.conn.execute("""
                                  SELECT policy,
                                         cidr,
                                         created_at,
-                                        added_by,
+                                        expires_at,
+                                        created_by,
                                         incident_id
                                  FROM ip_ranges
                                  WHERE is_redundant = 0
+                                     AND (expires_at > :now OR expires_at IS NULL)
                                  ORDER BY created_at DESC
-                                 """).fetchall()
+                                 """, params).fetchall()
 
         if not rows:
             print("\nNo active entries found.")
             return
 
-        print(f"\n{'POLICY':<6} | {'CIDR':<38} | {'CREATED_AT':<19} | {'ADDED BY':<12} | {'INCIDENT'}")
+        print(f"\n{'POLICY':<6} | {'CIDR':<38} | {'CREATED_AT':<19} | {'EXPIRES_AT':<19} | {'CREATED BY':<12} | {'INCIDENT'}")
         print("-" * 96)
 
         for r in rows:
             # Using f-string padding (<18 means 18 characters wide, left-aligned)
-            print(f"{r['policy']:<6} | {r['cidr']:<38} | {r['created_at']:19} | {r['added_by']:<12} | {r['incident_id']}")
+            print(f"{r['policy']:<6} | {r['cidr']:<38} | {r['created_at']:19} | {r['expires_at']:<19} | {r['created_by']:<12} | {r['incident_id']}")
 
         print("-" * 96 + "\n")
 
@@ -416,8 +462,9 @@ class IPDatabase:
                                         policy,
                                         version,
                                         incident_id,
-                                        added_by,
+                                        created_by,
                                         created_at,
+                                        expires_at,
                                         is_redundant
                                  FROM ip_ranges
                                  ORDER BY created_at DESC
@@ -426,7 +473,7 @@ class IPDatabase:
         with open(Path("reports") / fname, "w", newline='') as f:
             writer = csv.writer(f)
             writer.writerow(
-                ["IP/CIDR", "Policy", "Version", "Incident ID", "Author", "Timestamp", "Is Redundant"])
+                ["IP/CIDR", "Policy", "Version", "Incident ID", "Author", "Created", "Expires", "Is Redundant"])
             writer.writerows(rows)
         print(f"[+] CSV GENERATED: {fname} (Full Database Audit Export)")
 
@@ -447,7 +494,7 @@ Commands:
 
   export              Export active rules to text files
   report              Generate a full CSV audit report
-  dump                Display active rules on screen
+  list                Display active rules on screen
   purge               Clear redundant records from DB
 
 Note:
@@ -474,7 +521,7 @@ Examples:
 
     subparsers.add_parser("export")
     subparsers.add_parser("report")
-    subparsers.add_parser("dump")
+    subparsers.add_parser("list")
 
     purge = subparsers.add_parser("purge")
     purge.add_argument("--days", type=int)
@@ -497,13 +544,13 @@ Examples:
 
     # Command Routing
     if args.command in ["block", "deny"]:
-        inc, msg = db.parse_inputs()
-        db.add_entry(args.target, policy='BLOCK', inc_id=inc, comment=msg)
+        inc, msg, expires_at = db.parse_inputs()
+        db.add_entry(args.target, policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "allow":
-        inc, msg = db.parse_inputs()
-        db.add_entry(args.target, policy='ALLOW', inc_id=inc, comment=msg)
+        inc, msg, expires_at = db.parse_inputs()
+        db.add_entry(args.target, policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "remove":
-        db.remove_entry(args.target, dry_run=args.dry_run)
+        db.remove_entry(args.target)
     elif args.command == "purge":
         db.purge_redundant(days=args.days)
     elif args.command == "search":
@@ -512,8 +559,8 @@ Examples:
         db.export_lists()
     elif args.command == "report":
         db.generate_report()
-    elif args.command == "dump":
-        db.dump_to_screen()
+    elif args.command == "list":
+        db.list_active()
     else:
         print(custom_help)
 
