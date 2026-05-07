@@ -366,7 +366,7 @@ class IPDatabase:
 
             params = {
                 "ver": ip_obj.version,
-                "packed": ip_obj.packed
+                "packed": ip_obj.packed,
                 "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
 
