@@ -150,6 +150,8 @@ class IPDatabase:
         - Lines starting with # are full-line comments and are skipped.
         - Inline comments: everything from # onward is stripped before parsing.
         - Blank lines are skipped.
+        - Supports plain IPs, CIDR notation, and dash ranges (e.g. 1.1.1.1-1.1.1.26).
+          Dash ranges are expanded into the minimal set of covering CIDRs.
         - Invalid entries are warned about and skipped.
         """
         whitelist = []
@@ -165,9 +167,18 @@ class IPDatabase:
                 if not line:
                     continue
                 try:
-                    whitelist.append(ipaddress.ip_network(line, strict=False))
-                except ValueError:
-                    warn(f"[!] WHITELIST WARNING: Invalid entry on line {lineno}: '{line}' — skipped.")
+                    if '-' in line:
+                        # Dash range: split into start and end, expand to CIDRs
+                        start_str, end_str = [p.strip() for p in line.split('-', 1)]
+                        start_ip = ipaddress.ip_address(start_str)
+                        end_ip   = ipaddress.ip_address(end_str)
+                        if end_ip < start_ip:
+                            raise ValueError(f"end address {end_ip} is less than start {start_ip}")
+                        whitelist.extend(ipaddress.summarize_address_range(start_ip, end_ip))
+                    else:
+                        whitelist.append(ipaddress.ip_network(line, strict=False))
+                except ValueError as e:
+                    warn(f"[!] WHITELIST WARNING: Invalid entry on line {lineno}: '{line}' — {e} — skipped.")
 
         return whitelist
 
