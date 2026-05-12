@@ -68,12 +68,13 @@ class IPDatabase:
                               user TEXT,
                               incident_id TEXT,
                               comment TEXT,
+                              expires_at TIMESTAMP,
                               timestamp TIMESTAMP
                           );
                           """)
         self.conn.commit()
 
-    def _log_event(self, event_type, target_cidr, incident_id="N/A", comment=""):
+    def _log_event(self, event_type, target_cidr, incident_id="N/A", comment="", expires_at=None):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         user = getpass.getuser()
 
@@ -84,18 +85,19 @@ class IPDatabase:
             "user": user,
             "inc": incident_id,
             "msg": comment,
+            "expires_at": expires_at,
             "ts": timestamp
         }
 
         try:
             with self.conn:
                 self.conn.execute("""
-                                  INSERT INTO audit_history (event_type, target_cidr, user, incident_id, comment, timestamp)
-                                  VALUES (:event_type, :target, :user, :inc, :msg, :ts)
+                                  INSERT INTO audit_history (event_type, target_cidr, user, incident_id, comment, expires_at, timestamp)
+                                  VALUES (:event_type, :target, :user, :inc, :msg, :expires_at, :ts)
                                   """, log_data)
 
             self.logger.info(
-                f"ACTION: {event_type} | TARGET: {target_cidr} | ID: {incident_id} | COMMENT: {comment}",
+                f"ACTION: {event_type} | TARGET: {target_cidr} | ID: {incident_id} | EXPIRES: {expires_at} | COMMENT: {comment}",
                 extra={'user': user}
             )
         except Exception as e:
@@ -168,7 +170,7 @@ class IPDatabase:
 
         # Validation + behavior
         if expiry_days == 0:
-            expires_at = "9999-09-09 00:00:00"
+            expires_at = None
         elif 1 <= expiry_days <= max_expiry_days:
             expires_at = (now + timedelta(days=expiry_days)).strftime("%Y-%m-%d %H:%M:%S")
         else:
@@ -262,7 +264,7 @@ class IPDatabase:
                                   """, params)
 
             print(f"SUCCESS: {policy} rule for {cidr_val} committed.")
-            self._log_event(f"ADDED {policy} {cidr_val} {inc_id} expires: {expires_at} \"{comment}\"", cidr_val, inc_id, comment)
+            self._log_event(f"ADDED_{policy}", cidr_val, inc_id, comment, expires_at)
 
         except Exception as e:
             print(f"[-] ERROR: {e}")
@@ -272,31 +274,74 @@ class IPDatabase:
             # Normalize input to find the correct record
             net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
 
-            # Get Incident and Comment for the audit trail
-            inc_id, comment = self.parse_inputs()
-
-            params = {
+            # Locate the target record(s) by exact CIDR — may be multiple (different policies)
+            lookup_params = {
                 'version': version,
                 'start_blob': start,
                 'end_blob': end
             }
+            targets = self.conn.execute("""
+                                        SELECT id, cidr, policy
+                                        FROM ip_ranges
+                                        WHERE version = :version
+                                          AND start_blob = :start_blob
+                                          AND end_blob = :end_blob
+                                          AND is_redundant = 0
+                                        """, lookup_params).fetchall()
 
-            # Identify children that would be "un-swallowed"
+            if not targets:
+                print(f"\n[-] NOT FOUND: No active record matching '{cidr_val}' exists.")
+                return
+
+            # If multiple policies match, show them and ask which to remove
+            if len(targets) > 1:
+                print(f"\nMultiple active records found for '{cidr_val}':")
+                for i, t in enumerate(targets):
+                    print(f"  [{i}] id={t['id']}  policy={t['policy']}")
+                choice = input("Enter index to remove: ").strip()
+                try:
+                    target_row = targets[int(choice)]
+                except (ValueError, IndexError):
+                    print("[-] Invalid selection. Aborting.")
+                    return
+            else:
+                target_row = targets[0]
+
+            print(f"\nAbout to remove: {target_row['policy']} rule for '{cidr_val}' (id={target_row['id']})")
+            if input("Confirm removal? (y/n): ").lower() != 'y':
+                print("Removal aborted.")
+                return
+
+            # Get Incident and Comment for the audit trail
+            inc_id, comment, _ = self.parse_inputs()
+
+            target_policy = target_row['policy']
+            target_id = target_row['id']
+
+            # Identify children that would be "un-swallowed" — same policy only
+            child_params = {
+                'version': version,
+                'start_blob': start,
+                'end_blob': end,
+                'policy': target_policy
+            }
             to_restore = self.conn.execute("""
                                            SELECT original_input, incident_id, created_by
                                            FROM ip_ranges
                                            WHERE version = :version
                                              AND start_blob >= :start_blob
                                              AND end_blob <= :end_blob
+                                             AND policy = :policy
                                              AND is_redundant = 1
-                                           """, params).fetchall()
+                                           """, child_params).fetchall()
 
             with self.conn:
-                params = {
+                restore_params = {
                     'incident_id': inc_id,
                     'version': version,
                     'start_blob': start,
-                    'end_blob': end
+                    'end_blob': end,
+                    'policy': target_policy
                 }
 
                 # Update restored children to the NEW Incident ID authorizing their reactivation
@@ -307,19 +352,16 @@ class IPDatabase:
                                   WHERE version = :version
                                     AND start_blob >= :start_blob
                                     AND end_blob <= :end_blob
+                                    AND policy = :policy
                                     AND is_redundant = 1
-                                  """, params)
+                                  """, restore_params)
 
-                # Remove the actual record
-                params = {
-                    'cidr': cidr_val,
-                }
-                c = self.conn.execute("DELETE FROM ip_ranges WHERE cidr = :cidr", params)
+                # Remove the specific record by primary key
+                c = self.conn.execute("DELETE FROM ip_ranges WHERE id = :id", {'id': target_id})
 
                 if c.rowcount > 0:
-                    # Log to database and text file
                     self._log_event("REMOVED", cidr_val, inc_id, comment)
-                    print(f"\nSUCCESS: '{cidr_val}' removed.")
+                    print(f"\nSUCCESS: '{cidr_val}' ({target_policy}) removed.")
                     if to_restore:
                         print(f"Reciprocity: {len(to_restore)} child ranges reactivated under INC {inc_id}.")
                 else:
@@ -331,12 +373,12 @@ class IPDatabase:
         # Permanently deletes redundant (swallowed) records from the database.
         try:
             query = "DELETE FROM ip_ranges WHERE is_redundant = 1"
-            params = []
+            params = {}
 
             if days:
                 cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-                query += " AND created_at < ?"
-                params.append(cutoff)
+                query += " AND created_at < :cutoff"
+                params['cutoff'] = cutoff
 
             # Confirm with count first
             count_query = query.replace("DELETE", "SELECT COUNT(*) as total")
