@@ -569,26 +569,99 @@ def main():
     custom_help = """
 Firewall Admin Tool (FWAdmin)
 =========================================
-Usage: python fwadmin.py COMMAND [TARGET]
+Usage: python fwadmin.py COMMAND [TARGET] [OPTIONS]
 
-Commands:
-  allow  (x.x.x.x)    Allows an IP or CIDR range
-  block  (x.x.x.x)    Blocks an IP or CIDR range
-  deny   (x.x.x.x)    Alias for block
-  search (x.x.x.x)    Check if an IP is in the database
-  remove (x.x.x.x)    Remove a rule and restore children
+TARGET may be a plain IP address or a CIDR range (e.g. 1.2.3.4 or 1.2.3.0/24).
+Plain IPv4 addresses are treated as /32; plain IPv6 addresses are treated as /64.
+Only globally routable addresses are accepted.
 
-  export              Export active rules to text files
-  report              Generate a full CSV audit report
-  list                Display active rules on screen
-  purge               Clear redundant records from DB
+--- Rule Commands ---
 
-Note:
-  The "allow" command can be disabled in order to maintain compatibility with Entra Conditional Access Policy block lists
+  block  <target>     Add a BLOCK rule for the given IP or CIDR range.
+                      If the target overlaps a larger existing BLOCK rule it is
+                      already covered and will not be added. If it overlaps an
+                      ALLOW rule you will be prompted to confirm the exception.
+                      Prompts for: Incident/Ticket ID, comment, expiration.
+                      Blocked by whitelist.txt if the target overlaps a
+                      protected network (see Whitelist section below).
 
-Examples:
+  deny   <target>     Alias for block. Identical behavior.
+
+  allow  <target>     Add an ALLOW rule for the given IP or CIDR range.
+                      Behavior mirrors block but for the ALLOW policy.
+                      May be disabled via DENY_ONLY=TRUE in config.env to
+                      maintain compatibility with Entra Conditional Access
+                      Policy block lists.
+                      Prompts for: Incident/Ticket ID, comment, expiration.
+
+  remove <target>     Remove an active BLOCK or ALLOW rule for the given IP
+                      or CIDR. If the removed range was covering smaller
+                      (redundant) ranges of the same policy, those child
+                      ranges are automatically reactivated.
+                      Prompts for: Incident/Ticket ID, comment.
+
+  search <target>     Look up whether an IP address is covered by any active
+                      rule in the database. Displays policy, range, author,
+                      creation date, expiration, and incident ID for every
+                      matching entry. Does not require a routable address.
+
+--- Maintenance Commands ---
+
+  export              Export all active, non-redundant rules to flat text
+                      files in the rules/ directory:
+                        rules/ip_blocklist.txt
+                        rules/ip_allowlist.txt
+                      Suitable for ingestion by external firewall tooling.
+
+  list                Print all active, non-redundant rules to the screen in
+                      a formatted table showing policy, CIDR, dates, author,
+                      and incident ID.
+
+  report              Generate a full CSV audit export of every rule in the
+                      database (including redundant/expired entries) to:
+                        reports/ip_audit_report.csv
+
+  purge               Permanently delete redundant (swallowed) records from
+                      the database. Redundant records are created automatically
+                      when a broader range supersedes a narrower one.
+                        --days N    Only purge records older than N days.
+                                    Omit to purge all redundant records.
+
+--- Whitelist ---
+
+  If whitelist.txt exists in the working directory, any block/deny command
+  targeting a network that overlaps a whitelisted entry will be rejected
+  immediately — no prompts, no database write.
+
+  File format:
+    - One IP or CIDR per line
+    - Lines beginning with # are comments and are ignored
+    - Inline comments are supported: everything from # onward is stripped
+    - Blank lines are ignored
+    - Invalid entries produce a warning and are skipped
+
+  Example whitelist.txt:
+    # Core infrastructure — never block
+    203.0.113.0/24      # NOC uplink
+    198.51.100.10       # monitoring host
+    2001:db8::/32       # IPv6 management range
+
+--- Configuration (config.env) ---
+
+  DENY_ONLY      TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
+  DEFAULT_EXPIRY days        Default expiration if operator presses Enter (default 30)
+  MAX_EXPIRY     days        Maximum allowed expiration days (default 31)
+
+--- Examples ---
+
   python fwadmin.py block 1.2.3.4
-  python fwadmin.py allow 10.0.0.0/24
+  python fwadmin.py block 10.10.0.0/16
+  python fwadmin.py allow 203.0.113.50
+  python fwadmin.py remove 1.2.3.4
+  python fwadmin.py search 1.2.3.4
+  python fwadmin.py purge --days 90
+  python fwadmin.py export
+  python fwadmin.py list
   python fwadmin.py report
     """
 
