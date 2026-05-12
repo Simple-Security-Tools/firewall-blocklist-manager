@@ -9,17 +9,20 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import dotenv_values
 
+from colorama import init, Fore, Style
+init(autoreset=True)
+
 def err(msg):
     """Print an error message in red to stderr."""
-    print(f"\033[91m{msg}\033[0m", file=sys.stderr)
+    print(Fore.RED + msg, file=sys.stderr)
 
 def warn(msg):
     """Print a warning message in yellow to stderr."""
-    print(f"\033[93m{msg}\033[0m", file=sys.stderr)
+    print(Fore.YELLOW + msg, file=sys.stderr)
 
 def ok(msg):
     """Print a success message in green."""
-    print(f"\033[92m{msg}\033[0m")
+    print(Fore.GREEN + msg)
 
 
 class IPDatabase:
