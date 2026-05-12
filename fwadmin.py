@@ -9,6 +9,19 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import dotenv_values
 
+def err(msg):
+    """Print an error message in red to stderr."""
+    print(f"\033[91m{msg}\033[0m", file=sys.stderr)
+
+def warn(msg):
+    """Print a warning message in yellow to stderr."""
+    print(f"\033[93m{msg}\033[0m", file=sys.stderr)
+
+def ok(msg):
+    """Print a success message in green."""
+    print(f"\033[92m{msg}\033[0m")
+
+
 class IPDatabase:
     def __init__(self, db_name="ip_manager.db"):
         self.config = dotenv_values("config.env")
@@ -102,7 +115,7 @@ class IPDatabase:
                 extra={'user': user}
             )
         except Exception as e:
-            print(f"[-] AUDIT LOGGING ERROR: {e}")
+            err(f"[-] AUDIT LOGGING ERROR: {e}")
 
     def _get_parent_range(self, version, start, end, policy):
         """Returns the CIDR of an active range that covers the provided range."""
@@ -151,7 +164,7 @@ class IPDatabase:
                 try:
                     whitelist.append(ipaddress.ip_network(line, strict=False))
                 except ValueError:
-                    print(f"[!] WHITELIST WARNING: Invalid entry on line {lineno}: '{line}' — skipped.")
+                    warn(f"[!] WHITELIST WARNING: Invalid entry on line {lineno}: '{line}' — skipped.")
 
         return whitelist
 
@@ -189,10 +202,9 @@ class IPDatabase:
     def expiration_date_prompt(self):
         now = datetime.now()
         default_expiry_days = int(self.config.get("DEFAULT_EXPIRY", 30))
-        max_expiry_days = int(self.config.get("MAX_EXPIRY", 31))
 
         user_input = input(
-            f"Enter expiration days (0–{max_expiry_days}, 0=indefinite) "
+            f"Enter expiration days (1+, 0=indefinite) "
             f"[{default_expiry_days}]: "
         ).strip()
 
@@ -203,16 +215,17 @@ class IPDatabase:
             try:
                 expiry_days = int(user_input)
             except ValueError:
-                print("Invalid input: must be an integer")
+                err("Invalid input: must be an integer")
                 sys.exit(1)
 
         # Validation + behavior
         if expiry_days == 0:
             expires_at = None
-        elif 1 <= expiry_days <= max_expiry_days:
+        elif expiry_days >= 1:
             expires_at = (now + timedelta(days=expiry_days)).strftime("%Y-%m-%d %H:%M:%S")
         else:
-            raise SystemExit(f"Expiration days must be between 1 and {max_expiry_days} OR 0 for indefinite")
+            err("Expiration days must be a positive integer OR 0 for indefinite")
+            sys.exit(1)
 
         return expires_at
 
@@ -244,13 +257,8 @@ class IPDatabase:
 
             # Safety Gate: Stop execution if ALLOW is attempted in DENY_MODE
             if self.deny_mode and policy.upper() == "ALLOW":
-                sys.exit("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")  #
-
-            # Whitelist Gate: Prevent blocking a protected network
-            if policy.upper() == "BLOCK":
-                protected = self._check_whitelist(net_obj)
-                if protected:
-                    sys.exit(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Rule not added.")
+                err("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")
+                sys.exit(1)
 
             # Determine opposite policy for conflict checks without overwriting 'policy'
             other_policy = 'ALLOW' if policy == 'BLOCK' else 'BLOCK'
@@ -275,7 +283,7 @@ class IPDatabase:
 
             if conflict:
                 # Safer access using the column name 'cidr'
-                print(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict})")
+                warn(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict})")
                 if input(f"Confirm adding this {policy} exception? (y/n): ").lower() != 'y':
                     return
 
@@ -283,7 +291,7 @@ class IPDatabase:
             existing = self._get_parent_range(version, start, end, policy)
 
             if existing:
-                print(f"\n{ip_input} is already covered by active range: {existing}")
+                warn(f"\n{ip_input} is already covered by active range: {existing}")
                 return
 
             with self.conn:
@@ -307,11 +315,11 @@ class IPDatabase:
                                   VALUES (:orig, :cidr, :version, :start_blob, :end_blob, :inc, :policy, :created_by, :created_at, :expires_at)
                                   """, params)
 
-            print(f"SUCCESS: {policy} rule for {cidr_val} committed.")
+            ok(f"SUCCESS: {policy} rule for {cidr_val} committed.")
             self._log_event(f"ADDED_{policy}", cidr_val, inc_id, comment, expires_at)
 
         except Exception as e:
-            print(f"[-] ERROR: {e}")
+            err(f"[-] ERROR: {e}")
 
     def remove_entry(self, ip_input):
         try:
@@ -334,7 +342,7 @@ class IPDatabase:
                                         """, lookup_params).fetchall()
 
             if not targets:
-                print(f"\n[-] NOT FOUND: No active record matching '{cidr_val}' exists.")
+                err(f"\n[-] NOT FOUND: No active record matching '{cidr_val}' exists.")
                 return
 
             # If multiple policies match, show them and ask which to remove
@@ -346,7 +354,7 @@ class IPDatabase:
                 try:
                     target_row = targets[int(choice)]
                 except (ValueError, IndexError):
-                    print("[-] Invalid selection. Aborting.")
+                    err("[-] Invalid selection. Aborting.")
                     return
             else:
                 target_row = targets[0]
@@ -405,13 +413,13 @@ class IPDatabase:
 
                 if c.rowcount > 0:
                     self._log_event("REMOVED", cidr_val, inc_id, comment)
-                    print(f"\nSUCCESS: '{cidr_val}' ({target_policy}) removed.")
+                    ok(f"\nSUCCESS: '{cidr_val}' ({target_policy}) removed.")
                     if to_restore:
                         print(f"Reciprocity: {len(to_restore)} child ranges reactivated under INC {inc_id}.")
                 else:
-                    print(f"\n[-] NOT FOUND: No record matching '{cidr_val}' exists.")
+                    err(f"\n[-] NOT FOUND: No record matching '{cidr_val}' exists.")
         except Exception as e:
-            print(f"[-] ERROR during removal: {e}")
+            err(f"[-] ERROR during removal: {e}")
 
     def purge_redundant(self, days=None):
         # Permanently deletes redundant (swallowed) records from the database.
@@ -440,11 +448,11 @@ class IPDatabase:
                 with self.conn:
                     self.conn.execute(query, params)
                 self._log_event("PURGE", f"{total_to_purge} records")
-                print(f"SUCCESS: Permanently purged {total_to_purge} records from database.")
+                ok(f"SUCCESS: Permanently purged {total_to_purge} records from database.")
             else:
                 print("Purge aborted.")
         except Exception as e:
-            print(f"[-] ERROR during purge: {e}")
+            err(f"[-] ERROR during purge: {e}")
 
     def search_ip(self, search_ip):
         try:
@@ -479,9 +487,9 @@ class IPDatabase:
                     print(f" EXPIRES: {r['expires_at']}")
                     print(f" ID:     {r['incident_id']}\n")
             else:
-                print(f"\n[-] NO MATCH: The address {search_ip} is not covered by any policy.")
+                warn(f"\n[-] NO MATCH: The address {search_ip} is not covered by any policy.")
         except Exception as e:
-            print(f"[-] SEARCH ERROR: {e}")
+            err(f"[-] SEARCH ERROR: {e}")
 
     def export_lists(self):
         for p in ['BLOCK', 'ALLOW']:
@@ -650,7 +658,6 @@ Only globally routable addresses are accepted.
 
   DENY_ONLY      TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
   DEFAULT_EXPIRY days        Default expiration if operator presses Enter (default 30)
-  MAX_EXPIRY     days        Maximum allowed expiration days (default 31)
 
 --- Examples ---
 
@@ -697,12 +704,19 @@ Only globally routable addresses are accepted.
     # Validation and routing (same as your logic)
     if args.command in ["block", "deny", "allow", "search", "remove"]:
         if db.is_input_ip_address(args.target) is False:
-            sys.exit("[-] Invalid IP or CIDR")
+            err("[-] Invalid IP or CIDR")
+            sys.exit(1)
         if args.command != "search" and db.is_ip_address_routable(args.target) is False:
-            sys.exit("[-] Non-routable IP")
+            err("[-] Non-routable IP")
+            sys.exit(1)
 
     # Command Routing
     if args.command in ["block", "deny"]:
+        net_obj, _, _, _, cidr_val = db.normalize_cidr(args.target)
+        protected = db._check_whitelist(net_obj)
+        if protected:
+            err(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Rule not added.")
+            sys.exit(1)
         inc, msg, expires_at = db.parse_inputs()
         db.add_entry(args.target, policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "allow":
