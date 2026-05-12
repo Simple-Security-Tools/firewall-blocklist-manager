@@ -35,6 +35,7 @@ class IPDatabase:
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self._create_table()
+        self.whitelist = self._load_whitelist()
 
     def _create_table(self):
         # Initializes the database schema
@@ -127,6 +128,43 @@ class IPDatabase:
         result = self.conn.execute(query, params).fetchone()
         return result['cidr'] if result else None
 
+    def _load_whitelist(self, path="whitelist.txt"):
+        """
+        Loads whitelist.txt and returns a list of ip_network objects.
+        - Lines starting with # are full-line comments and are skipped.
+        - Inline comments: everything from # onward is stripped before parsing.
+        - Blank lines are skipped.
+        - Invalid entries are warned about and skipped.
+        """
+        whitelist = []
+        wl_path = Path(path)
+
+        if not wl_path.exists():
+            return whitelist
+
+        with open(wl_path) as f:
+            for lineno, raw in enumerate(f, start=1):
+                # Strip inline comment and surrounding whitespace
+                line = raw.split("#")[0].strip()
+                if not line:
+                    continue
+                try:
+                    whitelist.append(ipaddress.ip_network(line, strict=False))
+                except ValueError:
+                    print(f"[!] WHITELIST WARNING: Invalid entry on line {lineno}: '{line}' — skipped.")
+
+        return whitelist
+
+    def _check_whitelist(self, net_obj):
+        """
+        Returns the whitelisted network (as a string) that overlaps net_obj,
+        or None if no overlap is found.
+        """
+        for protected in self.whitelist:
+            if net_obj.overlaps(protected):
+                return str(protected)
+        return None
+
     def is_input_ip_address(self, input):
         try:
             return ipaddress.ip_network(input, strict=False)
@@ -207,6 +245,12 @@ class IPDatabase:
             # Safety Gate: Stop execution if ALLOW is attempted in DENY_MODE
             if self.deny_mode and policy.upper() == "ALLOW":
                 sys.exit("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")  #
+
+            # Whitelist Gate: Prevent blocking a protected network
+            if policy.upper() == "BLOCK":
+                protected = self._check_whitelist(net_obj)
+                if protected:
+                    sys.exit(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Rule not added.")
 
             # Determine opposite policy for conflict checks without overwriting 'policy'
             other_policy = 'ALLOW' if policy == 'BLOCK' else 'BLOCK'
