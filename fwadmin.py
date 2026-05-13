@@ -192,17 +192,58 @@ class IPDatabase:
                 return str(protected)
         return None
 
+    @staticmethod
+    def _confirm_large_range(start_ip, end_ip, cidrs):
+        """
+        Warns and prompts for confirmation if a dash range crosses a /8 or /16
+        boundary. Returns True if the operator confirms, False to abort.
+        """
+        start_octets = str(start_ip).split('.')
+        end_octets   = str(end_ip).split('.')
+
+        if start_octets[:3] == end_octets[:3]:
+            return True
+
+        total_ips = sum(net.num_addresses for net in cidrs)
+        warn(f"\n[!] WARNING: This range crosses a /24 boundary.")
+        warn(f"    Start : {start_ip}")
+        warn(f"    End   : {end_ip}")
+        warn(f"    Expands to {len(cidrs)} CIDRs ({total_ips:,} IPs):")
+        for net in cidrs:
+            warn(f"      {net}  ({net.num_addresses:,} IPs)")
+        confirm = input("\nAre you sure you want to continue? (yes/no): ").strip().lower()
+        return confirm == 'yes'
+
+    @staticmethod
+    def expand_range(ip_input):
+        """
+        Accepts a plain IP, CIDR, or dash range (e.g. 192.168.1.15-192.168.1.20).
+        Returns (list of ip_network objects, start_ip or None, end_ip or None).
+        Ranges are expanded into the minimal set of covering CIDRs, since
+        Microsoft Named Locations and most firewall APIs only accept IPs/CIDRs.
+        Raises ValueError on invalid input.
+        """
+        if '-' in ip_input:
+            start_str, end_str = [p.strip() for p in ip_input.split('-', 1)]
+            start_ip = ipaddress.ip_address(start_str)
+            end_ip   = ipaddress.ip_address(end_str)
+            if end_ip < start_ip:
+                raise ValueError(f"End address {end_ip} is less than start address {start_ip}")
+            return list(ipaddress.summarize_address_range(start_ip, end_ip)), start_ip, end_ip
+        else:
+            return [ipaddress.ip_network(ip_input, strict=False)], None, None
+
     def is_input_ip_address(self, input):
         try:
-            return ipaddress.ip_network(input, strict=False)
+            self.expand_range(input)
+            return True
         except ValueError:
             return False
 
     def is_ip_address_routable(self, ip_input):
         try:
-            # This handles IPv4, IPv6, and CIDR ranges automatically
-            net = ipaddress.ip_network(ip_input, strict=False)
-            return net.is_global
+            nets, _, _ = self.expand_range(ip_input)
+            return all(net.is_global for net in nets)
         except ValueError:
             return False
 
@@ -593,9 +634,12 @@ Firewall Admin Tool (FWAdmin)
 =========================================
 Usage: python fwadmin.py COMMAND [TARGET] [OPTIONS]
 
-TARGET may be a plain IP address or a CIDR range (e.g. 1.2.3.4 or 1.2.3.0/24).
-Plain IPv4 addresses are treated as /32; plain IPv6 addresses are treated as /64.
-Only globally routable addresses are accepted.
+TARGET may be a plain IP address, a CIDR range, or a dash range (e.g. 1.2.3.4,
+1.2.3.0/24, or 1.2.3.10-1.2.3.20). Plain IPv4 addresses are treated as /32;
+plain IPv6 addresses are treated as /64. Only globally routable addresses are
+accepted. Dash ranges are automatically expanded to the minimal set of CIDRs
+required to cover them, since firewall APIs and Microsoft Named Locations only
+accept IPs and CIDRs.
 
 --- Rule Commands ---
 
@@ -677,6 +721,7 @@ Only globally routable addresses are accepted.
 
   python fwadmin.py block 1.2.3.4
   python fwadmin.py block 10.10.0.0/16
+  python fwadmin.py block 10.10.0.15-10.10.0.20
   python fwadmin.py allow 203.0.113.50
   python fwadmin.py remove 1.2.3.4
   python fwadmin.py search 1.2.3.4
@@ -726,16 +771,34 @@ Only globally routable addresses are accepted.
 
     # Command Routing
     if args.command in ["block", "deny"]:
-        net_obj, _, _, _, cidr_val = db.normalize_cidr(args.target)
-        protected = db._check_whitelist(net_obj)
-        if protected:
-            err(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Rule not added.")
+        targets, start_ip, end_ip = db.expand_range(args.target)
+        if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
+            err("Aborted.")
             sys.exit(1)
+        if len(targets) > 1:
+            print(f"Range expanded to {len(targets)} CIDRs.")
+        for net_obj in targets:
+            cidr_val = str(net_obj)
+            protected = db._check_whitelist(net_obj)
+            if protected:
+                err(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Skipping.")
+                continue
         inc, msg, expires_at = db.parse_inputs()
-        db.add_entry(args.target, policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
+        for net_obj in targets:
+            cidr_val = str(net_obj)
+            if db._check_whitelist(net_obj):
+                continue
+            db.add_entry(cidr_val, policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "allow":
+        targets, start_ip, end_ip = db.expand_range(args.target)
+        if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
+            err("Aborted.")
+            sys.exit(1)
+        if len(targets) > 1:
+            print(f"Range expanded to {len(targets)} CIDRs.")
         inc, msg, expires_at = db.parse_inputs()
-        db.add_entry(args.target, policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg)
+        for net_obj in targets:
+            db.add_entry(str(net_obj), policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "remove":
         db.remove_entry(args.target)
     elif args.command == "purge":
