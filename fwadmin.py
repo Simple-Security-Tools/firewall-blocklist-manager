@@ -398,6 +398,11 @@ class IPDatabase:
 
             if not targets:
                 err(f"\n[-] NOT FOUND: No active record matching '{cidr_val}' exists.")
+                # Check if it's covered by a broader rule and hint the operator
+                for policy_check in ('BLOCK', 'ALLOW'):
+                    parent = self._get_parent_range(version, start, end, policy_check)
+                    if parent:
+                        warn(f"[i] NOTE: This address is covered by an active {policy_check} rule for {parent}.")
                 return
 
             # If multiple policies match, show them and ask which to remove
