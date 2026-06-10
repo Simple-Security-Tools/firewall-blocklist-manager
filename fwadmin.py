@@ -343,6 +343,7 @@ class IPDatabase:
         if ":" in ip_input:  # IPv6
             if "/" not in ip_input:
                 net = ipaddress.ip_network(f"{ip_input}/64", strict=False)
+                print(f"Note: plain IPv6 address expanded to /64 ({net}). To target a single host, use /128.")
             else:
                 net = ipaddress.ip_network(ip_input, strict=False)
         else:  # IPv4
