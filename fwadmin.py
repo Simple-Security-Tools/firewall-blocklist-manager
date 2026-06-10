@@ -653,7 +653,7 @@ class IPDatabase:
 
         for r in rows:
             # Using f-string padding (<18 means 18 characters wide, left-aligned)
-            print(f"{r['policy']:<6} | {r['cidr']:<38} | {r['created_at']:19} | {r['expires_at']:<19} | {r['created_by']:<12} | {r['incident_id']}")
+            print(f"{r['policy']:<6} | {r['cidr']:<38} | {r['created_at']:19} | {str(r['expires_at'] or 'never'):<19} | {r['created_by']:<12} | {r['incident_id']}")
 
         print("-" * 96 + "\n")
 
