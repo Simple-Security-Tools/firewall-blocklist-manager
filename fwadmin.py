@@ -308,31 +308,28 @@ class IPDatabase:
         now = datetime.now()
         default_expiry_days = int(self.config.get("DEFAULT_EXPIRY", 30))
 
-        user_input = input(
-            f"Enter expiration days (1+, 0=indefinite) "
-            f"[{default_expiry_days}]: "
-        ).strip()
+        while True:
+            user_input = input(
+                f"Enter expiration days (1+, 0=indefinite) "
+                f"[{default_expiry_days}]: "
+            ).strip()
 
-        # Handle empty input (use default)
-        if user_input == "":
-            expiry_days = default_expiry_days
-        else:
-            try:
-                expiry_days = int(user_input)
-            except ValueError:
-                err("Invalid input: must be an integer")
-                sys.exit(1)
+            if user_input == "":
+                expiry_days = default_expiry_days
+            else:
+                try:
+                    expiry_days = int(user_input)
+                except ValueError:
+                    err("Invalid input: must be an integer. Please try again.")
+                    continue
 
-        # Validation + behavior
-        if expiry_days == 0:
-            expires_at = None
-        elif expiry_days >= 1:
-            expires_at = (now + timedelta(days=expiry_days)).strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            err("Expiration days must be a positive integer OR 0 for indefinite")
-            sys.exit(1)
-
-        return expires_at
+            if expiry_days == 0:
+                return None
+            elif expiry_days >= 1:
+                return (now + timedelta(days=expiry_days)).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                err("Must be 0 (indefinite) or a positive integer. Please try again.")
+                continue
 
     def normalize_cidr(self, ip_input):
         """
