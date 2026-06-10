@@ -256,8 +256,12 @@ class IPDatabase:
         inc_id = input("\nEnter Incident/Ticket ID: ").strip()
         comment = input("Enter Operator Comment: ").strip()
         expires_at = self.expiration_date_prompt()
-
         return inc_id, comment, expires_at
+
+    def parse_removal_inputs(self):
+        inc_id = input("\nEnter Incident/Ticket ID: ").strip()
+        comment = input("Enter Operator Comment: ").strip()
+        return inc_id, comment
 
     def prompt_extend_expiration(self, row, policy='BLOCK'):
         """
@@ -476,7 +480,7 @@ class IPDatabase:
                 return
 
             # Get Incident and Comment for the audit trail
-            inc_id, comment, _ = self.parse_inputs()
+            inc_id, comment = self.parse_removal_inputs()
 
             target_policy = target_row['policy']
             target_id = target_row['id']
