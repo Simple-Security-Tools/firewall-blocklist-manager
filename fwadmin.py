@@ -256,27 +256,25 @@ class IPDatabase:
 
         return inc_id, comment, expires_at
 
-    def prompt_extend_expiration(self, row):
+    def prompt_extend_expiration(self, row, policy='BLOCK'):
         """
         Displays the existing rule details and prompts the operator to optionally
         extend the expiration.
           Enter  — keep current expiration unchanged
           0      — make indefinite (NULL)
-          N > 0  — add N days to the current expiration (or from now if indefinite)
+          N > 0  — add N days to the current expiration
         Returns the new expires_at string, or the original value if unchanged.
+        If the rule is already indefinite, prints a notice and returns None immediately.
         """
-        print(f"\n  Covered by : {row['cidr']}")
-        print(f"  Added by   : {row['created_by']}")
-        print(f"  Created    : {row['created_at']}")
-        print(f"  Expires    : {row['expires_at'] or 'never (indefinite)'}")
-        print(f"  Incident   : {row['incident_id']}")
+        warn(f"\nMatching rule already exists.")
 
         if row['expires_at'] is None:
-            warn("This rule is already indefinite. No expiration to extend.")
             return None
 
+        print(f"  {row['cidr']}  |  {policy}  |  Added: {row['created_at']}  |  Expires: {row['expires_at']}  |  Incident: {row['incident_id']}")
+
         user_input = input(
-            "\nExisting BLOCK rule found. Extend expiration? "
+            "\nExtend expiration? "
             "([Enter] keep current / 0 = indefinite / N = add N days): "
         ).strip()
 
@@ -845,8 +843,7 @@ accept IPs and CIDRs.
             _, version, start, end, _ = db.normalize_cidr(cidr_val)
             existing_row = db._get_covering_rule(version, start, end, 'BLOCK')
             if existing_row:
-                warn(f"\n[!] ALREADY COVERED: {cidr_val} is already subject to an active BLOCK rule.")
-                new_expiry = db.prompt_extend_expiration(existing_row)
+                new_expiry = db.prompt_extend_expiration(existing_row, policy='BLOCK')
                 if new_expiry != existing_row['expires_at']:
                     with db.conn:
                         db.conn.execute(
@@ -874,9 +871,16 @@ accept IPs and CIDRs.
         for net_obj in targets:
             cidr_val = str(net_obj)
             _, version, start, end, _ = db.normalize_cidr(cidr_val)
-            existing = db._get_parent_range(version, start, end, 'ALLOW')
-            if existing:
-                warn(f"[!] ALREADY COVERED: {cidr_val} is already covered by active ALLOW rule ({existing}). Skipping.")
+            existing_row = db._get_covering_rule(version, start, end, 'ALLOW')
+            if existing_row:
+                new_expiry = db.prompt_extend_expiration(existing_row, policy='ALLOW')
+                if new_expiry != existing_row['expires_at']:
+                    with db.conn:
+                        db.conn.execute(
+                            "UPDATE ip_ranges SET expires_at = :exp WHERE id = :id",
+                            {'exp': new_expiry, 'id': existing_row['id']}
+                        )
+                    db._log_event("EXTENDED", existing_row['cidr'], comment=f"Expiry updated to {new_expiry or 'indefinite'}")
                 continue
             actionable.append(net_obj)
         if not actionable:
