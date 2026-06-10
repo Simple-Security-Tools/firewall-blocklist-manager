@@ -122,27 +122,29 @@ class IPDatabase:
 
     def _get_parent_range(self, version, start, end, policy):
         """Returns the CIDR of an active range that covers the provided range."""
+        row = self._get_covering_rule(version, start, end, policy)
+        return row['cidr'] if row else None
+
+    def _get_covering_rule(self, version, start, end, policy):
+        """Returns the full row of an active range that covers the provided range, or None."""
         params = {
             "v": version,
             "s": start,
             "e": end,
             "p": policy,
             "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
         }
-
         query = """
-                SELECT cidr \
+                SELECT *
                 FROM ip_ranges
-                WHERE version = :v \
-                  AND start_blob <= :s \
+                WHERE version = :v
+                  AND start_blob <= :s
                   AND end_blob >= :e
-                  AND policy = :p \
+                  AND policy = :p
                   AND is_redundant = 0
                   AND (expires_at > :now OR expires_at IS NULL)
                 """
-        result = self.conn.execute(query, params).fetchone()
-        return result['cidr'] if result else None
+        return self.conn.execute(query, params).fetchone()
 
     def _load_whitelist(self, path="whitelist.txt"):
         """
@@ -253,6 +255,56 @@ class IPDatabase:
         expires_at = self.expiration_date_prompt()
 
         return inc_id, comment, expires_at
+
+    def prompt_extend_expiration(self, row):
+        """
+        Displays the existing rule details and prompts the operator to optionally
+        extend the expiration.
+          Enter  — keep current expiration unchanged
+          0      — make indefinite (NULL)
+          N > 0  — add N days to the current expiration (or from now if indefinite)
+        Returns the new expires_at string, or the original value if unchanged.
+        """
+        print(f"\n  Covered by : {row['cidr']}")
+        print(f"  Added by   : {row['created_by']}")
+        print(f"  Created    : {row['created_at']}")
+        print(f"  Expires    : {row['expires_at'] or 'never (indefinite)'}")
+        print(f"  Incident   : {row['incident_id']}")
+
+        if row['expires_at'] is None:
+            warn("This rule is already indefinite. No expiration to extend.")
+            return None
+
+        user_input = input(
+            "\nExisting BLOCK rule found. Extend expiration? "
+            "([Enter] keep current / 0 = indefinite / N = add N days): "
+        ).strip()
+
+        if user_input == "":
+            return row['expires_at']  # unchanged
+
+        try:
+            days = int(user_input)
+        except ValueError:
+            err("Invalid input — expiration unchanged.")
+            return row['expires_at']
+
+        if days == 0:
+            return None  # indefinite
+
+        if days < 0:
+            err("Must be a positive integer — expiration unchanged.")
+            return row['expires_at']
+
+        # Base the extension on the current expiry, or from now if indefinite
+        if row['expires_at']:
+            base = datetime.strptime(row['expires_at'], "%Y-%m-%d %H:%M:%S")
+        else:
+            base = datetime.now()
+
+        new_expiry = (base + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        ok(f"Expiration updated to {new_expiry}.")
+        return new_expiry
 
     def expiration_date_prompt(self):
         now = datetime.now()
@@ -782,18 +834,34 @@ accept IPs and CIDRs.
             sys.exit(1)
         if len(targets) > 1:
             print(f"Range expanded to {len(targets)} CIDRs.")
+        # Pre-flight: resolve whitelist and DB coverage before prompting for input
+        actionable = []
         for net_obj in targets:
             cidr_val = str(net_obj)
             protected = db._check_whitelist(net_obj)
             if protected:
                 err(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Skipping.")
                 continue
-        inc, msg, expires_at = db.parse_inputs()
-        for net_obj in targets:
-            cidr_val = str(net_obj)
-            if db._check_whitelist(net_obj):
+            _, version, start, end, _ = db.normalize_cidr(cidr_val)
+            existing_row = db._get_covering_rule(version, start, end, 'BLOCK')
+            if existing_row:
+                warn(f"\n[!] ALREADY COVERED: {cidr_val} is already subject to an active BLOCK rule.")
+                new_expiry = db.prompt_extend_expiration(existing_row)
+                if new_expiry != existing_row['expires_at']:
+                    with db.conn:
+                        db.conn.execute(
+                            "UPDATE ip_ranges SET expires_at = :exp WHERE id = :id",
+                            {'exp': new_expiry, 'id': existing_row['id']}
+                        )
+                    db._log_event("EXTENDED", existing_row['cidr'], comment=f"Expiry updated to {new_expiry or 'indefinite'}")
                 continue
-            db.add_entry(cidr_val, policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
+            actionable.append(net_obj)
+        if not actionable:
+            warn("Nothing to add.")
+            sys.exit(0)
+        inc, msg, expires_at = db.parse_inputs()
+        for net_obj in actionable:
+            db.add_entry(str(net_obj), policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "allow":
         targets, start_ip, end_ip = db.expand_range(args.target)
         if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
@@ -801,8 +869,21 @@ accept IPs and CIDRs.
             sys.exit(1)
         if len(targets) > 1:
             print(f"Range expanded to {len(targets)} CIDRs.")
-        inc, msg, expires_at = db.parse_inputs()
+        # Pre-flight: check DB coverage before prompting for input
+        actionable = []
         for net_obj in targets:
+            cidr_val = str(net_obj)
+            _, version, start, end, _ = db.normalize_cidr(cidr_val)
+            existing = db._get_parent_range(version, start, end, 'ALLOW')
+            if existing:
+                warn(f"[!] ALREADY COVERED: {cidr_val} is already covered by active ALLOW rule ({existing}). Skipping.")
+                continue
+            actionable.append(net_obj)
+        if not actionable:
+            warn("Nothing to add.")
+            sys.exit(0)
+        inc, msg, expires_at = db.parse_inputs()
+        for net_obj in actionable:
             db.add_entry(str(net_obj), policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg)
     elif args.command == "remove":
         db.remove_entry(args.target)
