@@ -660,7 +660,7 @@ class IPDatabase:
 
     def generate_report(self):
         """Generates a comprehensive CSV of the entire database state."""
-        fname = "ip_audit_report.csv"
+        fname = f"ip_audit_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         rows = self.conn.execute("""
                                  SELECT original_input,
                                         policy,
