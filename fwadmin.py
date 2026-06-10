@@ -338,16 +338,19 @@ class IPDatabase:
                 err("Must be 0 (indefinite) or a positive integer. Please try again.")
                 continue
 
-    def normalize_cidr(self, ip_input):
+    def normalize_cidr(self, ip_input, notify=False):
         """
         Handles IPv4/IPv6 parsing.
         Converts plain IPs: IPv4 -> /32, IPv6 -> /64.
+        Pass notify=True to print an informational message when a plain IPv6
+        address is auto-expanded to /64 (appropriate for add operations only).
         """
         # Logic for IPv6 expansion vs IPv4 host conversion
         if ":" in ip_input:  # IPv6
             if "/" not in ip_input:
                 net = ipaddress.ip_network(f"{ip_input}/64", strict=False)
-                print(f"Note: plain IPv6 address expanded to /64 ({net}). To target a single host, use /128.")
+                if notify:
+                    print(f"Note: plain IPv6 address expanded to /64 ({net}). To target a single host, use /128.")
             else:
                 net = ipaddress.ip_network(ip_input, strict=False)
         else:  # IPv4
@@ -361,7 +364,7 @@ class IPDatabase:
 
     def add_entry(self, ip_input, inc_id='N/A', comment='', expires_at=None, policy='BLOCK'):
         try:
-            net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
+            net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input, notify=True)
             current_user = getpass.getuser()
             created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
