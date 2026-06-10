@@ -584,6 +584,7 @@ class IPDatabase:
                     FROM ip_ranges
                     WHERE version = :ver
                       AND :packed BETWEEN start_blob AND end_blob
+                      AND is_redundant = 0
                       AND (expires_at > :now OR expires_at IS NULL)
                     ORDER BY created_at DESC
                     """
@@ -592,14 +593,12 @@ class IPDatabase:
             if results:
                 print(f"\n--- Full Audit Report for {search_ip} ---")
                 for r in results:
-                    # Accessing by column name via sqlite3.Row
-                    status = "[REDUNDANT]" if r['is_redundant'] == 1 else "[ACTIVE]"
-                    print(f" POLICY: {r['policy']} {status}")
-                    print(f" RANGE:  {r['cidr']}")
-                    print(f" AUTHOR: {r['created_by']}")
-                    print(f" CREATED: {r['created_at']}")
-                    print(f" EXPIRES: {r['expires_at']}")
-                    print(f" ID:     {r['incident_id']}\n")
+                    print(f" POLICY:   {r['policy']}")
+                    print(f" RANGE:    {r['cidr']}")
+                    print(f" AUTHOR:   {r['created_by']}")
+                    print(f" CREATED:  {r['created_at']}")
+                    print(f" EXPIRES:  {r['expires_at'] or 'never'}")
+                    print(f" INCIDENT: {r['incident_id']}\n")
             else:
                 warn(f"\n[-] NO MATCH: The address {search_ip} is not covered by any policy.")
         except Exception as e:
