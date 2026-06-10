@@ -400,13 +400,6 @@ class IPDatabase:
                 if input(f"Confirm adding this {policy} exception? (y/n): ").lower() != 'y':
                     return
 
-            # REDUNDANCY CHECK (Checking against the SAME policy)
-            existing = self._get_parent_range(version, start, end, policy)
-
-            if existing:
-                warn(f"\n{ip_input} is already covered by active range: {existing}")
-                return
-
             with self.conn:
                 # Mark smaller ranges as redundant
                 cursor = self.conn.execute("""
