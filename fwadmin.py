@@ -543,7 +543,10 @@ class IPDatabase:
                 params['cutoff'] = cutoff
 
             # Confirm with count first
-            count_query = query.replace("DELETE", "SELECT COUNT(*) as total")
+            if days:
+                count_query = "SELECT COUNT(*) as total FROM ip_ranges WHERE is_redundant = 1 AND created_at < :cutoff"
+            else:
+                count_query = "SELECT COUNT(*) as total FROM ip_ranges WHERE is_redundant = 1"
             total_to_purge = self.conn.execute(count_query, params).fetchone()['total']
 
             if total_to_purge == 0:
