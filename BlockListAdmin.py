@@ -427,9 +427,11 @@ class IPDatabase:
 
             ok(f"SUCCESS: {policy} rule for {cidr_val} committed.")
             self._log_event(f"ADDED_{policy}", cidr_val, inc_id, comment, expires_at)
+            return True
 
         except Exception as e:
             err(f"[-] ERROR: {e}")
+            return False
 
     def remove_entry(self, ip_input):
         try:
@@ -905,7 +907,8 @@ accept IPs and CIDRs.
                 sys.exit(0)
             inc, msg, expires_at = db.parse_inputs()
             for net_obj in actionable:
-                db.add_entry(str(net_obj), policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg)
+                if not db.add_entry(str(net_obj), policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg):
+                    sys.exit(1)
         elif args.command == "allow":
             targets, start_ip, end_ip = db.expand_range(args.target)
             if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
@@ -935,7 +938,8 @@ accept IPs and CIDRs.
                 sys.exit(0)
             inc, msg, expires_at = db.parse_inputs()
             for net_obj in actionable:
-                db.add_entry(str(net_obj), policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg)
+                if not db.add_entry(str(net_obj), policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg):
+                    sys.exit(1)
         elif args.command == "remove":
             db.remove_entry(args.target)
         elif args.command == "purge":
