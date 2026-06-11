@@ -770,9 +770,11 @@ accept IPs and CIDRs.
 --- Maintenance Commands ---
 
   export              Export all active, non-redundant rules to flat text
-                      files in the rules/ directory:
-                        rules/ip_blocklist.txt
-                        rules/ip_allowlist.txt
+                      files. Output paths are configured via FILE_OUTPUT_DENY
+                      and FILE_OUTPUT_ALLOW in config.env. If not set, defaults
+                      to:
+                        rules/block.txt
+                        rules/allow.txt
                       Suitable for ingestion by external firewall tooling.
 
   list                Print all active, non-redundant rules to the screen in
