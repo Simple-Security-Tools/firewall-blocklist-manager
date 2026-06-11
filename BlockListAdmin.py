@@ -203,7 +203,7 @@ class IPDatabase:
     @staticmethod
     def _confirm_large_range(start_ip, end_ip, cidrs):
         """
-        Warns and prompts for confirmation if a dash range crosses a /8 or /16
+        Warns and prompts for confirmation if a dash range crosses a /24
         boundary. Returns True if the operator confirms, False to abort.
         """
         start_octets = str(start_ip).split('.')
