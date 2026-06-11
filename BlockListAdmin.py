@@ -690,7 +690,7 @@ def main():
     custom_help = """
 Firewall Admin Tool (FWAdmin)
 =========================================
-Usage: python fwadmin.py COMMAND [TARGET] [OPTIONS]
+Usage: python BlockListAdmin.py COMMAND [TARGET] [OPTIONS]
 
 TARGET may be a plain IP address, a CIDR range, or a dash range (e.g. 1.2.3.4,
 1.2.3.0/24, or 1.2.3.10-1.2.3.20). Plain IPv4 addresses are treated as /32;
@@ -743,7 +743,7 @@ accept IPs and CIDRs.
 
   report              Generate a full CSV audit export of every rule in the
                       database (including redundant/expired entries) to:
-                        reports/ip_audit_report.csv
+                        reports/ip_audit_report_YYYYMMDD_HHMMSS.csv
 
   purge               Permanently delete redundant (swallowed) records from
                       the database. Redundant records are created automatically
@@ -777,16 +777,16 @@ accept IPs and CIDRs.
 
 --- Examples ---
 
-  python fwadmin.py block 1.2.3.4
-  python fwadmin.py block 10.10.0.0/16
-  python fwadmin.py block 10.10.0.15-10.10.0.20
-  python fwadmin.py allow 203.0.113.50
-  python fwadmin.py remove 1.2.3.4
-  python fwadmin.py search 1.2.3.4
-  python fwadmin.py purge --days 90
-  python fwadmin.py export
-  python fwadmin.py list
-  python fwadmin.py report
+  python BlockListAdmin.py block 1.2.3.4
+  python BlockListAdmin.py block 10.10.0.0/16
+  python BlockListAdmin.py block 10.10.0.15-10.10.0.20
+  python BlockListAdmin.py allow 203.0.113.50
+  python BlockListAdmin.py remove 1.2.3.4
+  python BlockListAdmin.py search 1.2.3.4
+  python BlockListAdmin.py purge --days 90
+  python BlockListAdmin.py export
+  python BlockListAdmin.py list
+  python BlockListAdmin.py report
     """
 
     # 2. Add add_help=False to stop argparse from auto-generating help
