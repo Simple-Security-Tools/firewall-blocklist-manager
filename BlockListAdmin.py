@@ -241,9 +241,9 @@ class IPDatabase:
         else:
             return [ipaddress.ip_network(ip_input, strict=False)], None, None
 
-    def is_input_ip_address(self, input):
+    def is_input_ip_address(self, ip_input):
         try:
-            self.expand_range(input)
+            self.expand_range(ip_input)
             return True
         except ValueError:
             return False
