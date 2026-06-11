@@ -605,16 +605,15 @@ class IPDatabase:
             err(f"[-] SEARCH ERROR: {e}")
 
     def export_lists(self):
+        output_paths = {
+            'BLOCK': self.config.get("FILE_OUTPUT_DENY") or str(Path("rules") / "block.txt"),
+            'ALLOW': self.config.get("FILE_OUTPUT_ALLOW") or str(Path("rules") / "allow.txt"),
+        }
+
         for p in ['BLOCK', 'ALLOW']:
-            fname = f"ip_{p.lower()}list.txt"
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            params = {'policy': p, 'now': now}
 
-            params = {
-                'policy': p,
-                'now': now
-            }
-
-            # Updated query to check for expiration
             rows = self.conn.execute("""
                                      SELECT cidr
                                      FROM ip_ranges
@@ -625,10 +624,12 @@ class IPDatabase:
                                               start_blob ASC
                                      """, params).fetchall()
 
-            with open(Path("rules") / fname, "w") as f:
+            out_path = Path(output_paths[p])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "w") as f:
                 for r in rows:
                     f.write(f"{r['cidr']}\n")
-            print(f"[+] EXPORTED: {len(rows)} rules to {fname}")
+            print(f"[+] EXPORTED: {len(rows)} rules to {out_path}")
 
     def list_active(self):
         params = {
