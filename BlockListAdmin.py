@@ -499,7 +499,8 @@ class IPDatabase:
                                              AND end_blob <= :end_blob
                                              AND policy = :policy
                                              AND is_redundant = 1
-                                           """, child_params).fetchall()
+                                             AND (expires_at > :now OR expires_at IS NULL)
+                                           """, {**child_params, 'now': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}).fetchall()
 
             with self.conn:
                 restore_params = {
@@ -520,7 +521,8 @@ class IPDatabase:
                                     AND end_blob <= :end_blob
                                     AND policy = :policy
                                     AND is_redundant = 1
-                                  """, restore_params)
+                                    AND (expires_at > :now OR expires_at IS NULL)
+                                  """, {**restore_params, 'now': datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
 
                 # Remove the specific record by primary key
                 c = self.conn.execute("DELETE FROM ip_ranges WHERE id = :id", {'id': target_id})
