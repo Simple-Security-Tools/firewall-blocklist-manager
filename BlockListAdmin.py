@@ -1,9 +1,11 @@
+import hashlib
 import sqlite3
 import ipaddress
 import argparse
 import csv
 import getpass
 import logging
+import shutil
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -36,6 +38,7 @@ class IPDatabase:
         Path("logs").mkdir(exist_ok=True)
         Path("rules").mkdir(exist_ok=True)
         Path("reports").mkdir(exist_ok=True)
+        Path("backups").mkdir(exist_ok=True)
 
         # Setup Python Logging Module
         log_file = Path("logs") / "audit.log"
@@ -626,6 +629,28 @@ class IPDatabase:
 
             out_path = Path(output_paths[p])
             out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if out_path.exists():
+                timestamp = datetime.now().strftime("%Y-%d-%m_%H_%M_%S")
+                backup_name = f"{out_path.stem}-{timestamp}{out_path.suffix}"
+                backup_path = Path("backups") / backup_name
+                shutil.copy2(out_path, backup_path)
+
+                def _sha256(path):
+                    h = hashlib.sha256()
+                    with open(path, "rb") as fh:
+                        for chunk in iter(lambda: fh.read(65536), b""):
+                            h.update(chunk)
+                    return h.hexdigest()
+
+                src_hash = _sha256(out_path)
+                dst_hash = _sha256(backup_path)
+                if src_hash != dst_hash:
+                    err(f"[!] BACKUP INTEGRITY FAILURE: hash mismatch for {backup_name}. Export aborted.")
+                    backup_path.unlink(missing_ok=True)
+                    sys.exit(1)
+                print(f"[+] BACKUP: {out_path.name} -> backups/{backup_name} (verified)")
+
             with open(out_path, "w") as f:
                 for r in rows:
                     f.write(f"{r['cidr']}\n")
