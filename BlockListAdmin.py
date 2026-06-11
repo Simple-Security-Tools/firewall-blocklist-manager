@@ -317,7 +317,11 @@ class IPDatabase:
 
     def expiration_date_prompt(self):
         now = datetime.now()
-        default_expiry_days = int(self.config.get("DEFAULT_EXPIRY", 30))
+        try:
+            default_expiry_days = int(self.config.get("DEFAULT_EXPIRY", 30))
+        except ValueError:
+            warn("[!] config.env: DEFAULT_EXPIRY is not a valid integer — falling back to 30 days.")
+            default_expiry_days = 30
 
         while True:
             user_input = input(
