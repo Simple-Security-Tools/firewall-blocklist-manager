@@ -877,73 +877,47 @@ accept IPs and CIDRs.
                 err("[-] Non-routable IP")
                 sys.exit(1)
 
+        def run_add(policy):
+            targets, start_ip, end_ip = db.expand_range(args.target)
+            if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
+                err("Aborted.")
+                sys.exit(1)
+            if len(targets) > 1:
+                print(f"Range expanded to {len(targets)} CIDRs.")
+            actionable = []
+            for net_obj in targets:
+                cidr_val = str(net_obj)
+                if policy == 'BLOCK':
+                    protected = db._check_whitelist(net_obj)
+                    if protected:
+                        err(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Skipping.")
+                        continue
+                _, version, start, end, _ = db.normalize_cidr(cidr_val)
+                existing_row = db._get_covering_rule(version, start, end, policy)
+                if existing_row:
+                    new_expiry = db.prompt_extend_expiration(existing_row, policy=policy)
+                    if new_expiry != existing_row['expires_at']:
+                        with db.conn:
+                            db.conn.execute(
+                                "UPDATE ip_ranges SET expires_at = :exp WHERE id = :id",
+                                {'exp': new_expiry, 'id': existing_row['id']}
+                            )
+                        db._log_event("EXTENDED", existing_row['cidr'], comment=f"Expiry updated to {new_expiry or 'indefinite'}")
+                    continue
+                actionable.append(net_obj)
+            if not actionable:
+                warn("Nothing to add.")
+                sys.exit(0)
+            inc, msg, expires_at = db.parse_inputs()
+            for net_obj in actionable:
+                if not db.add_entry(str(net_obj), policy=policy, inc_id=inc, expires_at=expires_at, comment=msg):
+                    sys.exit(1)
+
         # Command Routing
         if args.command in ["block", "deny"]:
-            targets, start_ip, end_ip = db.expand_range(args.target)
-            if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
-                err("Aborted.")
-                sys.exit(1)
-            if len(targets) > 1:
-                print(f"Range expanded to {len(targets)} CIDRs.")
-            # Pre-flight: resolve whitelist and DB coverage before prompting for input
-            actionable = []
-            for net_obj in targets:
-                cidr_val = str(net_obj)
-                protected = db._check_whitelist(net_obj)
-                if protected:
-                    err(f"[!] BLOCKED BY WHITELIST: {cidr_val} overlaps protected network {protected} in whitelist.txt. Skipping.")
-                    continue
-                _, version, start, end, _ = db.normalize_cidr(cidr_val)
-                existing_row = db._get_covering_rule(version, start, end, 'BLOCK')
-                if existing_row:
-                    new_expiry = db.prompt_extend_expiration(existing_row, policy='BLOCK')
-                    if new_expiry != existing_row['expires_at']:
-                        with db.conn:
-                            db.conn.execute(
-                                "UPDATE ip_ranges SET expires_at = :exp WHERE id = :id",
-                                {'exp': new_expiry, 'id': existing_row['id']}
-                            )
-                        db._log_event("EXTENDED", existing_row['cidr'], comment=f"Expiry updated to {new_expiry or 'indefinite'}")
-                    continue
-                actionable.append(net_obj)
-            if not actionable:
-                warn("Nothing to add.")
-                sys.exit(0)
-            inc, msg, expires_at = db.parse_inputs()
-            for net_obj in actionable:
-                if not db.add_entry(str(net_obj), policy='BLOCK', inc_id=inc, expires_at=expires_at, comment=msg):
-                    sys.exit(1)
+            run_add('BLOCK')
         elif args.command == "allow":
-            targets, start_ip, end_ip = db.expand_range(args.target)
-            if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
-                err("Aborted.")
-                sys.exit(1)
-            if len(targets) > 1:
-                print(f"Range expanded to {len(targets)} CIDRs.")
-            # Pre-flight: check DB coverage before prompting for input
-            actionable = []
-            for net_obj in targets:
-                cidr_val = str(net_obj)
-                _, version, start, end, _ = db.normalize_cidr(cidr_val)
-                existing_row = db._get_covering_rule(version, start, end, 'ALLOW')
-                if existing_row:
-                    new_expiry = db.prompt_extend_expiration(existing_row, policy='ALLOW')
-                    if new_expiry != existing_row['expires_at']:
-                        with db.conn:
-                            db.conn.execute(
-                                "UPDATE ip_ranges SET expires_at = :exp WHERE id = :id",
-                                {'exp': new_expiry, 'id': existing_row['id']}
-                            )
-                        db._log_event("EXTENDED", existing_row['cidr'], comment=f"Expiry updated to {new_expiry or 'indefinite'}")
-                    continue
-                actionable.append(net_obj)
-            if not actionable:
-                warn("Nothing to add.")
-                sys.exit(0)
-            inc, msg, expires_at = db.parse_inputs()
-            for net_obj in actionable:
-                if not db.add_entry(str(net_obj), policy='ALLOW', inc_id=inc, expires_at=expires_at, comment=msg):
-                    sys.exit(1)
+            run_add('ALLOW')
         elif args.command == "remove":
             db.remove_entry(args.target)
         elif args.command == "purge":
