@@ -278,10 +278,11 @@ class IPDatabase:
         """
         warn(f"\nMatching rule already exists.")
 
-        if row['expires_at'] is None:
-            return None
+        print(f"  {row['cidr']}  |  {policy}  |  Added: {row['created_at']}  |  Expires: {row['expires_at'] or 'never'}  |  Incident: {row['incident_id']}")
 
-        print(f"  {row['cidr']}  |  {policy}  |  Added: {row['created_at']}  |  Expires: {row['expires_at']}  |  Incident: {row['incident_id']}")
+        if row['expires_at'] is None:
+            print("Rule is already indefinite. No expiration to extend.")
+            return None
 
         user_input = input(
             "\nExtend expiration? "
