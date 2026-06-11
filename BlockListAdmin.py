@@ -11,7 +11,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import dotenv_values
 
-from colorama import init, Fore, Style
+from colorama import init, Fore
 init(autoreset=True)
 
 def err(msg):
