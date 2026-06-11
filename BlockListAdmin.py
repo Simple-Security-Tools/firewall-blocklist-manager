@@ -634,27 +634,39 @@ class IPDatabase:
                 timestamp = datetime.now().strftime("%Y-%d-%m_%H_%M_%S")
                 backup_name = f"{out_path.stem}-{timestamp}{out_path.suffix}"
                 backup_path = Path("backups") / backup_name
-                shutil.copy2(out_path, backup_path)
+                backup_ok = False
 
-                def _sha256(path):
-                    h = hashlib.sha256()
-                    with open(path, "rb") as fh:
-                        for chunk in iter(lambda: fh.read(65536), b""):
-                            h.update(chunk)
-                    return h.hexdigest()
-
-                src_hash = _sha256(out_path)
-                dst_hash = _sha256(backup_path)
-                if src_hash != dst_hash:
-                    err(f"[!] BACKUP INTEGRITY FAILURE: hash mismatch for {backup_name}. Export aborted.")
+                try:
+                    src_hash = self._sha256(out_path)
+                    shutil.copy2(out_path, backup_path)
+                    dst_hash = self._sha256(backup_path)
+                    if src_hash == dst_hash:
+                        backup_ok = True
+                    else:
+                        backup_path.unlink(missing_ok=True)
+                except Exception:
                     backup_path.unlink(missing_ok=True)
-                    sys.exit(1)
-                print(f"[+] BACKUP: {out_path.name} -> backups/{backup_name} (verified)")
+
+                if backup_ok:
+                    print(f"[+] BACKUP: {out_path.name} -> backups/{backup_name} (verified)")
+                else:
+                    err(f"[!] INTEGRITY ISSUE: couldn't back up existing {out_path.name}.")
+                    if input("Overwrite without backup? (y/n): ").strip().lower() != 'y':
+                        warn(f"Skipping export for {p}.")
+                        continue
 
             with open(out_path, "w") as f:
                 for r in rows:
                     f.write(f"{r['cidr']}\n")
             print(f"[+] EXPORTED: {len(rows)} rules to {out_path}")
+
+    @staticmethod
+    def _sha256(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
     def list_active(self):
         params = {
