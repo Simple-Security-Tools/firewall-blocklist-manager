@@ -29,7 +29,10 @@ def ok(msg):
 
 class IPDatabase:
     def __init__(self, db_name="ip_manager.db"):
-        self.config = dotenv_values("config.env")
+        config_path = Path(__file__).parent / "config.env"
+        if not config_path.exists():
+            warn(f"[!] config.env not found at {config_path} — using defaults.")
+        self.config = dotenv_values(config_path)
 
         self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
 
@@ -84,8 +87,7 @@ class IPDatabase:
         self.conn.execute("""
                           CREATE TABLE IF NOT EXISTS audit_history
                           (
-                              id
-                              INTEGER PRIMARY KEY AUTOINCREMENT,
+                              id INTEGER PRIMARY KEY AUTOINCREMENT,
                               event_type TEXT, -- ADD, REMOVE, PURGE
                               target_cidr TEXT,
                               user TEXT,
@@ -403,10 +405,9 @@ class IPDatabase:
             conflict = self._get_parent_range(version, start, end, other_policy)
 
             if conflict:
-                # Safer access using the column name 'cidr'
                 warn(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict})")
                 if input(f"Confirm adding this {policy} exception? (y/n): ").lower() != 'y':
-                    return
+                    return True
 
             with self.conn:
                 # Mark smaller ranges as redundant
