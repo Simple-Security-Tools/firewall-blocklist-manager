@@ -42,12 +42,12 @@ class IPDatabase:
 
         # Setup Python Logging Module
         log_file = Path("logs") / "audit.log"
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s [%(levelname)s] USER: %(user)s | %(message)s',
-            handlers=[logging.FileHandler(log_file)]
-        )
         self.logger = logging.getLogger("FWAdmin")
+        self.logger.setLevel(logging.INFO)
+        if not self.logger.handlers:
+            handler = logging.FileHandler(log_file)
+            handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] USER: %(user)s | %(message)s'))
+            self.logger.addHandler(handler)
 
         # Initialize Database
         db_path = Path("database") / db_name
