@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import dotenv_values
+from microsoft_graph_helpers import get_bearer_token, update_named_location
 
 from colorama import init, Fore
 init(autoreset=True)
@@ -670,6 +671,59 @@ class IPDatabase:
                     f.write(f"{r['cidr']}\n")
             print(f"[+] EXPORTED: {len(rows)} rules to {out_path}")
 
+    def sync_named_location(self):
+        """Export block list to file, then push CIDRs to the configured Entra Named Location."""
+        required = ["TENANT_ID", "CLIENT_ID", "SECRET", "BLOCKLIST_NAMED_LOCATION_ID"]
+        missing = [k for k in required if not self.config.get(k)]
+        if missing:
+            err(f"[!] Missing required config.env keys for sync: {', '.join(missing)}")
+            sys.exit(1)
+
+        # Export files first (includes backup logic)
+        self.export_lists()
+
+        # Fetch active BLOCK CIDRs
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        rows = self.conn.execute("""
+                                 SELECT cidr FROM ip_ranges
+                                 WHERE policy = 'BLOCK'
+                                   AND is_redundant = 0
+                                   AND (expires_at > :now OR expires_at IS NULL)
+                                 ORDER BY version ASC, start_blob ASC
+                                 """, {'now': now}).fetchall()
+
+        cidrs = [r['cidr'] for r in rows]
+
+        if not cidrs:
+            warn("[!] No active BLOCK rules to sync.")
+            return
+
+        print(f"\nSyncing {len(cidrs)} BLOCK CIDRs to Named Location...")
+
+        try:
+            token = get_bearer_token(
+                tenant_id=self.config["TENANT_ID"],
+                client_id=self.config["CLIENT_ID"],
+                client_secret=self.config["SECRET"],
+            )
+        except Exception as e:
+            err(f"[!] Failed to obtain Azure token: {e}")
+            sys.exit(1)
+
+        success = update_named_location(
+            bearer_token=token,
+            uuid=self.config["BLOCKLIST_NAMED_LOCATION_ID"],
+            type="ipRanges",
+            values=cidrs,
+        )
+
+        if success:
+            ok(f"SUCCESS: Named Location {self.config['BLOCKLIST_NAMED_LOCATION_ID']} updated with {len(cidrs)} CIDRs.")
+            self._log_event("SYNC", f"{len(cidrs)} CIDRs -> Named Location {self.config['BLOCKLIST_NAMED_LOCATION_ID']}")
+        else:
+            err(f"[!] Named Location update failed. File export completed but Entra was not updated.")
+            sys.exit(1)
+
     @staticmethod
     def _sha256(path):
         h = hashlib.sha256()
@@ -787,6 +841,11 @@ accept IPs and CIDRs.
                         rules/allow.txt
                       Suitable for ingestion by external firewall tooling.
 
+  sync                Export rules to file (same as export), then push all
+                      active BLOCK CIDRs to the Entra Named Location specified
+                      by NAMED_LOCATION_ID in config.env. Requires Azure
+                      credentials in config.env (see Configuration).
+
   list                Print all active, non-redundant rules to the screen in
                       a formatted table showing policy, CIDR, dates, author,
                       and incident ID.
@@ -822,8 +881,14 @@ accept IPs and CIDRs.
 
 --- Configuration (config.env) ---
 
-  DENY_ONLY      TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
-  DEFAULT_EXPIRY days        Default expiration if operator presses Enter (default 30)
+  DENY_ONLY           TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
+  DEFAULT_EXPIRY      days        Default expiration if operator presses Enter (default 30)
+  FILE_OUTPUT_DENY    path        Output path for exported BLOCK list (default rules/block.txt)
+  FILE_OUTPUT_ALLOW   path        Output path for exported ALLOW list (default rules/allow.txt)
+  TENANT_ID                    string      Azure AD tenant ID (required for sync)
+  CLIENT_ID                    string      App registration client ID (required for sync)
+  SECRET                       string      App registration client secret (required for sync)
+  BLOCKLIST_NAMED_LOCATION_ID  string      UUID of the Entra Named Location to update (required for sync)
 
 --- Examples ---
 
@@ -853,6 +918,7 @@ accept IPs and CIDRs.
         p.add_argument("target")
 
     subparsers.add_parser("export")
+    subparsers.add_parser("sync")
     subparsers.add_parser("report")
     subparsers.add_parser("list")
 
@@ -927,6 +993,8 @@ accept IPs and CIDRs.
             db.search_ip(args.target)
         elif args.command == "export":
             db.export_lists()
+        elif args.command == "sync":
+            db.sync_named_location()
         elif args.command == "report":
             db.generate_report()
         elif args.command == "list":
