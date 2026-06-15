@@ -6,3 +6,6 @@ database/*
 logs/*
 reports/*
 rules/*
+backup/*
+test*
+config.txt

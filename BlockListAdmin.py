@@ -30,9 +30,9 @@ def ok(msg):
 
 class IPDatabase:
     def __init__(self, db_name="ip_manager.db"):
-        config_path = Path(__file__).parent / "config.env"
+        config_path = Path(__file__).parent / "config.txt"
         if not config_path.exists():
-            warn(f"[!] config.env not found at {config_path} — using defaults.")
+            warn(f"[!] config.txt not found at {config_path} — using defaults.")
         self.config = dotenv_values(config_path)
 
         self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
@@ -323,7 +323,7 @@ class IPDatabase:
         try:
             default_expiry_days = int(self.config.get("DEFAULT_EXPIRY", 30))
         except ValueError:
-            warn("[!] config.env: DEFAULT_EXPIRY is not a valid integer — falling back to 30 days.")
+            warn("[!] config.txt: DEFAULT_EXPIRY is not a valid integer — falling back to 30 days.")
             default_expiry_days = 30
 
         while True:
@@ -439,6 +439,46 @@ class IPDatabase:
             err(f"[-] ERROR: {e}")
             return False
 
+    def _carve_out(self, net_obj, covering_row, inc_id, comment):
+        """Subtract net_obj from a covering rule, replacing it with the remaining CIDRs."""
+        covering_net = ipaddress.ip_network(covering_row['cidr'])
+        remaining = sorted(covering_net.address_exclude(net_obj), key=lambda n: n.network_address)
+
+        print(f"\nResulting BLOCK rules after carving {net_obj} out of {covering_net}:")
+        for r in remaining:
+            print(f"  {r}")
+
+        if input(f"\nApply ({len(remaining)} replacement rules)? (y/n): ").strip().lower() != 'y':
+            print("Aborted.")
+            return
+
+        current_user = getpass.getuser()
+        created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self.conn:
+            self.conn.execute("DELETE FROM ip_ranges WHERE id = :id", {'id': covering_row['id']})
+            for cidr in remaining:
+                _, version, start, end, cidr_val = self.normalize_cidr(str(cidr))
+                self.conn.execute("""
+                                  INSERT INTO ip_ranges
+                                  (original_input, cidr, version, start_blob, end_blob, incident_id, policy, created_by, created_at, expires_at)
+                                  VALUES (:orig, :cidr, :version, :start_blob, :end_blob, :inc, :policy, :created_by, :created_at, :expires_at)
+                                  """, {
+                    'orig': str(cidr),
+                    'cidr': cidr_val,
+                    'version': version,
+                    'start_blob': start,
+                    'end_blob': end,
+                    'inc': inc_id,
+                    'policy': covering_row['policy'],
+                    'created_by': current_user,
+                    'created_at': created_at,
+                    'expires_at': covering_row['expires_at'],
+                })
+
+        self._log_event("CARVED", f"{net_obj} from {covering_net}", inc_id, comment)
+        ok(f"SUCCESS: {net_obj} carved out of {covering_net}. {len(remaining)} replacement rules active.")
+
     def remove_entry(self, ip_input):
         try:
             # Normalize input to find the correct record
@@ -461,11 +501,13 @@ class IPDatabase:
 
             if not targets:
                 err(f"\n[-] NOT FOUND: No active record matching '{cidr_val}' exists.")
-                # Check if it's covered by a broader rule and hint the operator
                 for policy_check in ('BLOCK', 'ALLOW'):
-                    parent = self._get_parent_range(version, start, end, policy_check)
-                    if parent:
-                        warn(f"[i] NOTE: This address is covered by an active {policy_check} rule for {parent}.")
+                    covering_row = self._get_covering_rule(version, start, end, policy_check)
+                    if covering_row:
+                        warn(f"[i] NOTE: {cidr_val} is covered by an active {policy_check} rule for {covering_row['cidr']}.")
+                        if input(f"Carve {cidr_val} out of {covering_row['cidr']}? (y/n): ").strip().lower() == 'y':
+                            inc_id, comment = self.parse_removal_inputs()
+                            self._carve_out(net_obj, covering_row, inc_id, comment)
                 return
 
             # If multiple policies match, show them and ask which to remove
@@ -676,7 +718,7 @@ class IPDatabase:
         required = ["TENANT_ID", "CLIENT_ID", "SECRET", "BLOCKLIST_NAMED_LOCATION_ID"]
         missing = [k for k in required if not self.config.get(k)]
         if missing:
-            err(f"[!] Missing required config.env keys for sync: {', '.join(missing)}")
+            err(f"[!] Missing required config.txt keys for sync: {', '.join(missing)}")
             sys.exit(1)
 
         # Export files first (includes backup logic)
@@ -815,7 +857,7 @@ accept IPs and CIDRs.
 
   allow  <target>     Add an ALLOW rule for the given IP or CIDR range.
                       Behavior mirrors block but for the ALLOW policy.
-                      May be disabled via DENY_ONLY=TRUE in config.env to
+                      May be disabled via DENY_ONLY=TRUE in config.txt to
                       maintain compatibility with Entra Conditional Access
                       Policy block lists.
                       Prompts for: Incident/Ticket ID, comment, expiration.
@@ -835,7 +877,7 @@ accept IPs and CIDRs.
 
   export              Export all active, non-redundant rules to flat text
                       files. Output paths are configured via FILE_OUTPUT_DENY
-                      and FILE_OUTPUT_ALLOW in config.env. If not set, defaults
+                      and FILE_OUTPUT_ALLOW in config.txt. If not set, defaults
                       to:
                         rules/block.txt
                         rules/allow.txt
@@ -843,8 +885,8 @@ accept IPs and CIDRs.
 
   sync                Export rules to file (same as export), then push all
                       active BLOCK CIDRs to the Entra Named Location specified
-                      by NAMED_LOCATION_ID in config.env. Requires Azure
-                      credentials in config.env (see Configuration).
+                      by NAMED_LOCATION_ID in config.txt. Requires Azure
+                      credentials in config.txt (see Configuration).
 
   list                Print all active, non-redundant rules to the screen in
                       a formatted table showing policy, CIDR, dates, author,
@@ -879,7 +921,7 @@ accept IPs and CIDRs.
     198.51.100.10       # monitoring host
     2001:db8::/32       # IPv6 management range
 
---- Configuration (config.env) ---
+--- Configuration (config.txt) ---
 
   DENY_ONLY           TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
   DEFAULT_EXPIRY      days        Default expiration if operator presses Enter (default 30)
@@ -909,6 +951,7 @@ accept IPs and CIDRs.
 
     # Manually handle -h/--help to print your block
     parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("--test", action="store_true", help="Allow non-routable IPs (testing only)")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -940,7 +983,7 @@ accept IPs and CIDRs.
             if db.is_input_ip_address(args.target) is False:
                 err("[-] Invalid IP or CIDR")
                 sys.exit(1)
-            if args.command != "search" and db.is_ip_address_routable(args.target) is False:
+            if args.command != "search" and not args.test and db.is_ip_address_routable(args.target) is False:
                 err("[-] Non-routable IP")
                 sys.exit(1)
 
