@@ -131,11 +131,6 @@ class IPDatabase:
         except Exception as e:
             err(f"[-] AUDIT LOGGING ERROR: {e}")
 
-    def _get_parent_range(self, version, start, end, policy):
-        """Returns the CIDR of an active range that covers the provided range."""
-        row = self._get_covering_rule(version, start, end, policy)
-        return row['cidr'] if row else None
-
     def _get_covering_rule(self, version, start, end, policy):
         """Returns the full row of an active range that covers the provided range, or None."""
         params = {
@@ -405,10 +400,10 @@ class IPDatabase:
             }
 
             # CONFLICT CHECK (Checking against the OPPOSITE policy)
-            conflict = self._get_parent_range(version, start, end, other_policy)
+            conflict_row = self._get_covering_rule(version, start, end, other_policy)
 
-            if conflict:
-                warn(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict})")
+            if conflict_row:
+                warn(f"\nEXCEPTION DETECTED: {ip_input} overlaps an existing {other_policy} rule ({conflict_row['cidr']})")
                 if input(f"Confirm adding this {policy} exception? (y/n): ").lower() != 'y':
                     return True
 
@@ -545,7 +540,7 @@ class IPDatabase:
                 'policy': target_policy
             }
             to_restore = self.conn.execute("""
-                                           SELECT original_input, incident_id, created_by
+                                           SELECT id
                                            FROM ip_ranges
                                            WHERE version = :version
                                              AND start_blob >= :start_blob
@@ -817,7 +812,6 @@ class IPDatabase:
 
         print("-" * 96 + "\n")
 
-
     def generate_report(self):
         """Generates a comprehensive CSV of the entire database state."""
         fname = f"ip_audit_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -898,8 +892,10 @@ accept IPs and CIDRs.
 
   sync                Export rules to file (same as export), then push all
                       active BLOCK CIDRs to the Entra Named Location specified
-                      by NAMED_LOCATION_ID in config.txt. Requires Azure
-                      credentials in config.txt (see Configuration).
+                      by BLOCKLIST_NAMED_LOCATION_ID in config.txt. Requires
+                      Azure credentials in config.txt (see Configuration).
+                      Backs up the current Named Location state to backups/
+                      as JSON before overwriting it.
 
   list                Print all active, non-redundant rules to the screen in
                       a formatted table showing policy, CIDR, dates, author,
@@ -936,14 +932,14 @@ accept IPs and CIDRs.
 
 --- Configuration (config.txt) ---
 
-  DENY_ONLY           TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
-  DEFAULT_EXPIRY      days        Default expiration if operator presses Enter (default 30)
-  FILE_OUTPUT_DENY    path        Output path for exported BLOCK list (default rules/block.txt)
-  FILE_OUTPUT_ALLOW   path        Output path for exported ALLOW list (default rules/allow.txt)
-  TENANT_ID                    string      Azure AD tenant ID (required for sync)
-  CLIENT_ID                    string      App registration client ID (required for sync)
-  SECRET                       string      App registration client secret (required for sync)
-  BLOCKLIST_NAMED_LOCATION_ID  string      UUID of the Entra Named Location to update (required for sync)
+  DENY_ONLY                    TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
+  DEFAULT_EXPIRY                days       Default expiration if operator presses Enter (default 30)
+  FILE_OUTPUT_DENY               path      Output path for exported BLOCK list (default rules/block.txt)
+  FILE_OUTPUT_ALLOW              path      Output path for exported ALLOW list (default rules/allow.txt)
+  TENANT_ID                     string     Azure AD tenant ID (required for sync)
+  CLIENT_ID                     string     App registration client ID (required for sync)
+  SECRET                        string     App registration client secret (required for sync)
+  BLOCKLIST_NAMED_LOCATION_ID   string     UUID of the Entra Named Location to update (required for sync)
 
 --- Examples ---
 
@@ -952,11 +948,14 @@ accept IPs and CIDRs.
   python BlockListManager.py block 10.10.0.15-10.10.0.20
   python BlockListManager.py allow 203.0.113.50
   python BlockListManager.py remove 1.2.3.4
+  python BlockListManager.py remove 192.168.0.25/32  (carves out of a covering rule)
   python BlockListManager.py search 1.2.3.4
   python BlockListManager.py purge --days 90
   python BlockListManager.py export
+  python BlockListManager.py sync
   python BlockListManager.py list
   python BlockListManager.py report
+  python BlockListManager.py --test block 192.168.1.0/24  (bypass routability check)
     """
 
     # 2. Add add_help=False to stop argparse from auto-generating help
