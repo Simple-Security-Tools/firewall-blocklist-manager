@@ -1,4 +1,5 @@
 import hashlib
+import json
 import sqlite3
 import ipaddress
 import argparse
@@ -10,7 +11,7 @@ import sys
 from pathlib import Path
 from datetime import datetime, timedelta
 from dotenv import dotenv_values
-from microsoft_graph_helpers import get_bearer_token, update_named_location
+from microsoft_graph_helpers import get_bearer_token, get_named_location, update_named_location
 
 from colorama import init, Fore
 init(autoreset=True)
@@ -48,6 +49,7 @@ class IPDatabase:
         log_file = Path("logs") / "audit.log"
         self.logger = logging.getLogger("FWAdmin")
         self.logger.setLevel(logging.INFO)
+        self.logger.propagate = False
         if not self.logger.handlers:
             handler = logging.FileHandler(log_file)
             handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] USER: %(user)s | %(message)s'))
@@ -684,7 +686,7 @@ class IPDatabase:
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
             if out_path.exists():
-                timestamp = datetime.now().strftime("%Y-%d-%m_%H_%M_%S")
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
                 backup_name = f"{out_path.stem}-{timestamp}{out_path.suffix}"
                 backup_path = Path("backups") / backup_name
                 backup_ok = False
@@ -711,7 +713,7 @@ class IPDatabase:
             with open(out_path, "w") as f:
                 for r in rows:
                     f.write(f"{r['cidr']}\n")
-            print(f"[+] EXPORTED: {len(rows)} rules to {out_path}")
+            print(f"[+] EXPORTED: {len(rows)} rules to {out_path}\n")
 
     def sync_named_location(self):
         """Export block list to file, then push CIDRs to the configured Entra Named Location."""
@@ -740,8 +742,6 @@ class IPDatabase:
             warn("[!] No active BLOCK rules to sync.")
             return
 
-        print(f"\nSyncing {len(cidrs)} BLOCK CIDRs to Named Location...")
-
         try:
             token = get_bearer_token(
                 tenant_id=self.config["TENANT_ID"],
@@ -752,16 +752,29 @@ class IPDatabase:
             err(f"[!] Failed to obtain Azure token: {e}")
             sys.exit(1)
 
+        # Backup the current Named Location state before overwriting
+        location_id = self.config["BLOCKLIST_NAMED_LOCATION_ID"]
+        existing = get_named_location(bearer_token=token, uuid=location_id)
+        if existing:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
+            backup_name = f"named_location-{timestamp}.json"
+            backup_path = Path("backups") / backup_name
+            with open(backup_path, "w") as f:
+                json.dump(existing, f, indent=2)
+            print(f"[+] BACKUP: Named Location -> backups/{backup_name}")
+        else:
+            warn("[!] Could not retrieve current Named Location state — proceeding without backup.")
+
         success = update_named_location(
             bearer_token=token,
-            uuid=self.config["BLOCKLIST_NAMED_LOCATION_ID"],
+            uuid=location_id,
             type="ipRanges",
             values=cidrs,
         )
 
         if success:
-            ok(f"SUCCESS: Named Location {self.config['BLOCKLIST_NAMED_LOCATION_ID']} updated with {len(cidrs)} CIDRs.")
-            self._log_event("SYNC", f"{len(cidrs)} CIDRs -> Named Location {self.config['BLOCKLIST_NAMED_LOCATION_ID']}")
+            print(f"[+] EXPORTED: {len(cidrs)} rules to Named Location {location_id}\n")
+            self._log_event("SYNC", f"{len(cidrs)} CIDRs -> Named Location {location_id}")
         else:
             err(f"[!] Named Location update failed. File export completed but Entra was not updated.")
             sys.exit(1)
