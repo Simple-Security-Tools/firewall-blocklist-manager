@@ -47,7 +47,7 @@ class IPDatabase:
 
         # Setup Python Logging Module
         log_file = Path("logs") / "audit.log"
-        self.logger = logging.getLogger("FWAdmin")
+        self.logger = logging.getLogger("BlockListManager")
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
         if not self.logger.handlers:
@@ -845,9 +845,9 @@ class IPDatabase:
 def main():
     # Custom Help Text Block
     custom_help = """
-Firewall Admin Tool (FWAdmin)
+Firewall Blocklist Manager (BlockListManager)
 =========================================
-Usage: python BlockListAdmin.py COMMAND [TARGET] [OPTIONS]
+Usage: python BlockListManager.py COMMAND [TARGET] [OPTIONS]
 
 TARGET may be a plain IP address, a CIDR range, or a dash range (e.g. 1.2.3.4,
 1.2.3.0/24, or 1.2.3.10-1.2.3.20). Plain IPv4 addresses are treated as /32;
@@ -947,16 +947,16 @@ accept IPs and CIDRs.
 
 --- Examples ---
 
-  python BlockListAdmin.py block 1.2.3.4
-  python BlockListAdmin.py block 10.10.0.0/16
-  python BlockListAdmin.py block 10.10.0.15-10.10.0.20
-  python BlockListAdmin.py allow 203.0.113.50
-  python BlockListAdmin.py remove 1.2.3.4
-  python BlockListAdmin.py search 1.2.3.4
-  python BlockListAdmin.py purge --days 90
-  python BlockListAdmin.py export
-  python BlockListAdmin.py list
-  python BlockListAdmin.py report
+  python BlockListManager.py block 1.2.3.4
+  python BlockListManager.py block 10.10.0.0/16
+  python BlockListManager.py block 10.10.0.15-10.10.0.20
+  python BlockListManager.py allow 203.0.113.50
+  python BlockListManager.py remove 1.2.3.4
+  python BlockListManager.py search 1.2.3.4
+  python BlockListManager.py purge --days 90
+  python BlockListManager.py export
+  python BlockListManager.py list
+  python BlockListManager.py report
     """
 
     # 2. Add add_help=False to stop argparse from auto-generating help
