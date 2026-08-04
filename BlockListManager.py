@@ -62,6 +62,11 @@ class IPDatabase:
         self._create_table()
         self.whitelist = self._load_whitelist()
 
+        # A rule is only redundant for as long as the broader rule that swallowed
+        # it is still active. Re-check that on every run, before anything reads
+        # or writes the rule set.
+        self.reactivate_uncovered()
+
     def close(self):
         self.conn.close()
 
@@ -152,6 +157,76 @@ class IPDatabase:
                 """
         return self.conn.execute(query, params).fetchone()
 
+    def reactivate_uncovered(self, verbose=True):
+        """
+        Restores rules that were marked redundant by a broader rule which has
+        since expired.
+
+        Without this, a temporary wide rule permanently suppresses the narrower
+        rules it swallowed: when it expires those rules stay is_redundant = 1
+        forever and silently drop out of every export, even if they were created
+        with no expiration of their own. remove_entry() already reactivates
+        children when a covering rule is deleted; this is the same guarantee for
+        covering rules that lapse instead.
+
+        Candidates are processed broadest-first so a rule that is itself
+        reactivated continues to suppress its own children in the same pass.
+        Returns the list of reactivated rows.
+        """
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        candidates = self.conn.execute("""
+                                       SELECT id, cidr, version, start_blob, end_blob, policy
+                                       FROM ip_ranges
+                                       WHERE is_redundant = 1
+                                         AND (expires_at > :now OR expires_at IS NULL)
+                                       """, {'now': now}).fetchall()
+
+        if not candidates:
+            return []
+
+        def span(row):
+            return (int.from_bytes(row['end_blob'], 'big')
+                    - int.from_bytes(row['start_blob'], 'big'))
+
+        revived = []
+        with self.conn:
+            for row in sorted(candidates, key=span, reverse=True):
+                covering = self.conn.execute("""
+                                             SELECT 1
+                                             FROM ip_ranges
+                                             WHERE version = :version
+                                               AND start_blob <= :start_blob
+                                               AND end_blob >= :end_blob
+                                               AND policy = :policy
+                                               AND is_redundant = 0
+                                               AND id != :id
+                                               AND (expires_at > :now OR expires_at IS NULL)
+                                             LIMIT 1
+                                             """, {
+                                                 'version': row['version'],
+                                                 'start_blob': row['start_blob'],
+                                                 'end_blob': row['end_blob'],
+                                                 'policy': row['policy'],
+                                                 'id': row['id'],
+                                                 'now': now,
+                                             }).fetchone()
+
+                if covering:
+                    continue
+
+                self.conn.execute("UPDATE ip_ranges SET is_redundant = 0 WHERE id = :id",
+                                  {'id': row['id']})
+                revived.append(row)
+
+        for row in revived:
+            self._log_event("REACTIVATED", row['cidr'],
+                            comment="Covering rule expired; rule re-enforced")
+            if verbose:
+                warn(f"[i] REACTIVATED: {row['cidr']} ({row['policy']}) — its covering rule expired.")
+
+        return revived
+
     def _load_whitelist(self, path="whitelist.txt"):
         """
         Loads whitelist.txt and returns a list of ip_network objects.
@@ -166,6 +241,10 @@ class IPDatabase:
         wl_path = Path(path)
 
         if not wl_path.exists():
+            # Say so loudly. A missing file silently disables the only guard
+            # against blocking your own infrastructure.
+            warn(f"[!] NO WHITELIST: {wl_path} not found — nothing is protected from being "
+                 f"blocked. Copy whitelist.txt.example to whitelist.txt to enable it.")
             return whitelist
 
         with open(wl_path) as f:
@@ -323,9 +402,18 @@ class IPDatabase:
             warn("[!] config.txt: DEFAULT_EXPIRY is not a valid integer — falling back to 30 days.")
             default_expiry_days = 30
 
+        max_expiry = self.config.get("MAX_EXPIRY")
+        if max_expiry:
+            try:
+                max_expiry = int(max_expiry)
+            except ValueError:
+                warn("[!] config.txt: MAX_EXPIRY is not a valid integer — no cap applied.")
+                max_expiry = None
+
         while True:
+            rules_hint = f"1-{max_expiry}" if max_expiry else "1+, 0=indefinite"
             user_input = input(
-                f"Enter expiration days (1+, 0=indefinite) "
+                f"Enter expiration days ({rules_hint}) "
                 f"[{default_expiry_days}]: "
             ).strip()
 
@@ -338,7 +426,15 @@ class IPDatabase:
                     err("Invalid input: must be an integer. Please try again.")
                     continue
 
+            if max_expiry and expiry_days > max_expiry:
+                err(f"Exceeds MAX_EXPIRY of {max_expiry} days. Please try again.")
+                continue
+
             if expiry_days == 0:
+                if max_expiry:
+                    err(f"Indefinite rules are disabled while MAX_EXPIRY is set "
+                        f"({max_expiry} days). Please try again.")
+                    continue
                 return None
             elif expiry_days >= 1:
                 return (now + timedelta(days=expiry_days)).strftime("%Y-%m-%d %H:%M:%S")
@@ -608,7 +704,23 @@ class IPDatabase:
                 return
 
             print(f"\n--- Database Purge ---")
-            print(f"Found {total_to_purge} redundant records older than {days if days else 'all'} days.")
+            if days:
+                print(f"Found {total_to_purge} redundant records older than {days} days.")
+            else:
+                print(f"Found {total_to_purge} redundant records (no age limit).")
+
+            # Redundant-but-indefinite rules would come back on their own once the
+            # covering rule expires (see reactivate_uncovered). Purging destroys
+            # that, so call it out before the operator confirms.
+            indefinite_query = count_query.replace(
+                "WHERE is_redundant = 1", "WHERE is_redundant = 1 AND expires_at IS NULL"
+            )
+            indefinite = self.conn.execute(indefinite_query, params).fetchone()['total']
+            if indefinite:
+                warn(f"[!] {indefinite} of these have NO expiration and would be re-enforced "
+                     f"automatically once their covering rule lapses.")
+                warn("    Purging them removes that protection permanently.")
+
             confirm = input("This action is PERMANENT. Proceed? (y/n): ")
 
             if confirm.lower() == 'y':
@@ -910,6 +1022,18 @@ accept IPs and CIDRs.
                       when a broader range supersedes a narrower one.
                         --days N    Only purge records older than N days.
                                     Omit to purge all redundant records.
+                      Warns first if any of the records have no expiration,
+                      since those would otherwise be re-enforced automatically
+                      once their covering rule lapses.
+
+--- Redundancy ---
+
+  Adding a rule that covers narrower existing rules of the same policy marks
+  those as redundant so exports stay compact. This is reversible in both
+  directions: removing the covering rule reactivates its children under the new
+  incident ID, and letting the covering rule EXPIRE reactivates them on the next
+  run with a REACTIVATED audit entry. A temporary wide sweep therefore never
+  silently cancels a narrower permanent block.
 
 --- Whitelist ---
 
@@ -934,6 +1058,9 @@ accept IPs and CIDRs.
 
   DENY_ONLY                    TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
   DEFAULT_EXPIRY                days       Default expiration if operator presses Enter (default 30)
+  MAX_EXPIRY                    days       Optional cap on rule lifetime. When set, longer
+                                           expirations and indefinite (0) rules are refused.
+                                           Unset by default.
   FILE_OUTPUT_DENY               path      Output path for exported BLOCK list (default rules/block.txt)
   FILE_OUTPUT_ALLOW              path      Output path for exported ALLOW list (default rules/allow.txt)
   TENANT_ID                     string     Azure AD tenant ID (required for sync)
@@ -943,13 +1070,13 @@ accept IPs and CIDRs.
 
 --- Examples ---
 
-  python BlockListManager.py block 1.2.3.4
-  python BlockListManager.py block 10.10.0.0/16
-  python BlockListManager.py block 10.10.0.15-10.10.0.20
-  python BlockListManager.py allow 203.0.113.50
-  python BlockListManager.py remove 1.2.3.4
-  python BlockListManager.py remove 192.168.0.25/32  (carves out of a covering rule)
-  python BlockListManager.py search 1.2.3.4
+  python BlockListManager.py block 45.33.32.156
+  python BlockListManager.py block 45.33.32.0/24
+  python BlockListManager.py block 45.33.32.15-45.33.32.20
+  python BlockListManager.py allow 45.33.32.9
+  python BlockListManager.py remove 45.33.32.156
+  python BlockListManager.py remove 45.33.32.50/32  (carves out of a covering rule)
+  python BlockListManager.py search 45.33.32.156
   python BlockListManager.py purge --days 90
   python BlockListManager.py export
   python BlockListManager.py sync
@@ -1000,6 +1127,13 @@ accept IPs and CIDRs.
                 sys.exit(1)
 
         def run_add(policy):
+            # Refuse before prompting for incident ID, comment and expiration —
+            # add_entry() also enforces this, but only after the operator has
+            # already typed all three.
+            if db.deny_mode and policy == 'ALLOW':
+                err("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")
+                sys.exit(1)
+
             targets, start_ip, end_ip = db.expand_range(args.target)
             if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
                 err("Aborted.")

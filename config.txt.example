@@ -1,14 +1,25 @@
+# Copy this file to config.txt and fill it in. config.txt is gitignored —
+# it holds your client secret, so never commit it.
+
 # Using DENY_ONLY forces the script to only export firewall deny lists
 # which can then be kept in sync with Entra Conditional Access Policy Block Lists
 DENY_ONLY=true
+
+# Expiration offered when the operator just presses Enter.
 DEFAULT_EXPIRY=30
-MAX_EXPIRY=32
-FILE_OUTPUT_DENY=palo-blocks.txt
-FILE_OUTPUT_ALLOW=palo-allows.txt
+
+# Optional hard cap on rule lifetime, in days. When set, the operator cannot
+# enter a longer expiration AND cannot create indefinite (0) rules, since an
+# indefinite rule outlives any cap. Leave commented out to allow indefinite
+# rules, which is the default.
+#MAX_EXPIRY=32
+
+# Export destinations. Anything under rules/ is gitignored.
+FILE_OUTPUT_DENY=rules/palo-blocks.txt
+FILE_OUTPUT_ALLOW=rules/palo-allows.txt
 
 # required for entra sync
 TENANT_ID=
 CLIENT_ID=
 SECRET=
-SECRET_ID=
 BLOCKLIST_NAMED_LOCATION_ID=

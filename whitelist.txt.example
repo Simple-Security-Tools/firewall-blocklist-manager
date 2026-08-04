@@ -1,0 +1,23 @@
+# Copy this file to whitelist.txt and replace the entries below with the
+# networks that must never be blocked — your own infrastructure, egress
+# ranges, monitoring hosts, VPN concentrators, business-critical partners.
+#
+# Any block/deny targeting a network that OVERLAPS an entry here is rejected
+# outright: no prompt, no database write. A /16 that merely contains one
+# whitelisted /32 is rejected too.
+#
+# If whitelist.txt does not exist, nothing is protected and the tool warns
+# on every run.
+#
+# Format:
+#   - One IP, CIDR, or dash range per line (1.1.1.1-1.1.1.26)
+#   - Plain IPv4 is treated as /32, plain IPv6 as /64
+#   - # starts a comment, inline or full-line
+#   - Blank lines ignored; invalid entries warn and are skipped
+
+# --- replace everything below this line ---
+
+# Core infrastructure — never block
+203.0.113.0/24      # NOC uplink
+198.51.100.10       # monitoring host
+2001:db8::/32       # IPv6 management range

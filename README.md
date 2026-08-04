@@ -1,0 +1,72 @@
+# Simple Firewall Blocklist Manager
+
+A command-line tool for managing firewall IP block/allow rules in a local SQLite
+database, with audit logging, rule expiration, whitelist protection, flat-file
+export, and one-way sync to a Microsoft Entra Conditional Access Named Location.
+
+Full command reference: [DOCUMENTATION.md](DOCUMENTATION.md), or run
+`python BlockListManager.py --help`.
+
+## Quickstart
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cp config.txt.example config.txt
+cp whitelist.txt.example whitelist.txt   # then edit — see below
+```
+
+Edit `whitelist.txt` before adding any rules. It lists the networks that must
+never be blocked. Until it exists, nothing is protected and the tool warns on
+every run.
+
+Then:
+
+```bash
+python BlockListManager.py block 45.33.32.156
+python BlockListManager.py list
+python BlockListManager.py export
+```
+
+`block`, `allow` and `remove` prompt for an incident/ticket ID, a comment, and
+an expiration; every change is written to `logs/audit.log` and the
+`audit_history` table.
+
+## How rules interact
+
+Adding a rule that covers existing narrower rules marks those as **redundant**
+so exports stay compact. Redundancy is not permanent:
+
+- Remove the covering rule and its children are reactivated under the new
+  incident ID.
+- Let the covering rule **expire** and its children are reactivated on the next
+  run, with a `REACTIVATED` audit entry.
+
+This means a temporary wide sweep never silently cancels a narrower permanent
+block. `purge` deletes redundant records for good and warns first if any of
+them have no expiration.
+
+## Configuration
+
+`config.txt` is gitignored — it holds your Entra client secret. See
+[config.txt.example](config.txt.example) for every key. `sync` additionally
+requires `TENANT_ID`, `CLIENT_ID`, `SECRET` and `BLOCKLIST_NAMED_LOCATION_ID`,
+and backs up the current Named Location to `backups/` as JSON before
+overwriting it.
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+## Notes
+
+- Only globally routable addresses are accepted. Pass `--test` to allow private
+  or reserved ranges when experimenting.
+- Plain IPv4 is treated as `/32`, plain IPv6 as `/64`.
+- Known gaps against Entra Named Location limits are tracked in
+  [TODO.txt](TODO.txt).
