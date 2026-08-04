@@ -1141,6 +1141,11 @@ accept IPs and CIDRs.
             if len(targets) > 1:
                 print(f"Range expanded to {len(targets)} CIDRs.")
             actionable = []
+            # One dash range can expand to many CIDRs that are all covered by the
+            # same existing rule. Prompt once per covering rule, not once per
+            # CIDR — otherwise the operator answers the identical question
+            # repeatedly and each answer compounds the extension.
+            prompted = set()
             for net_obj in targets:
                 cidr_val = str(net_obj)
                 if policy == 'BLOCK':
@@ -1151,6 +1156,9 @@ accept IPs and CIDRs.
                 _, version, start, end, _ = db.normalize_cidr(cidr_val)
                 existing_row = db._get_covering_rule(version, start, end, policy)
                 if existing_row:
+                    if existing_row['id'] in prompted:
+                        continue
+                    prompted.add(existing_row['id'])
                     new_expiry = db.prompt_extend_expiration(existing_row, policy=policy)
                     if new_expiry != existing_row['expires_at']:
                         with db.conn:
