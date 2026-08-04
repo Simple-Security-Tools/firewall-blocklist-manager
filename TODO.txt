@@ -1,0 +1,5 @@
+to stay aligned with microsoft conditional access policy named locations:
+
+1) disallow blocks /7 or larger
+2) 2000 CIDRs per named location - when exporting or syncing block lists, warn if the list will require more than 1 named location
+3) Note that you cannot create a named location with no entries. You always need 1 entry to initialize it.
