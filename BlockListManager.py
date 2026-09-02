@@ -793,8 +793,7 @@ class IPDatabase:
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
             if out_path.exists():
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-                backup_name = f"{out_path.stem}-{timestamp}{out_path.suffix}"
+                backup_name = self._backup_name(out_path.stem, out_path.suffix)
                 backup_path = Path("backups") / backup_name
                 backup_ok = False
 
@@ -863,8 +862,7 @@ class IPDatabase:
         location_id = self.config["BLOCKLIST_NAMED_LOCATION_ID"]
         existing = get_named_location(bearer_token=token, uuid=location_id)
         if existing:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H_%M_%S")
-            backup_name = f"named_location-{timestamp}.json"
+            backup_name = self._backup_name("named_location", ".json")
             backup_path = Path("backups") / backup_name
             with open(backup_path, "w") as f:
                 json.dump(existing, f, indent=2)
@@ -885,6 +883,16 @@ class IPDatabase:
         else:
             err(f"[!] Named Location update failed. File export completed but Entra was not updated.")
             sys.exit(1)
+
+    @staticmethod
+    def _backup_name(label, suffix=""):
+        """
+        Builds a backup filename with the timestamp first, e.g.
+        2026-08-04_11_35_59-block.txt. The format is fixed-width and
+        zero-padded, so an alphabetical listing in Finder or any file browser
+        is also chronological.
+        """
+        return f"{datetime.now().strftime('%Y-%m-%d_%H_%M_%S')}-{label}{suffix}"
 
     @staticmethod
     def _sha256(path):

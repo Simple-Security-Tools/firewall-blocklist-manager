@@ -572,6 +572,51 @@ class TestCarveOut(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# _backup_name
+# ---------------------------------------------------------------------------
+
+class TestBackupName(unittest.TestCase):
+    """Backups lead with the timestamp so a file browser sorts them by age."""
+
+    def setUp(self):
+        self.db = make_db()
+
+    def _at(self, when, label, suffix=""):
+        with patch("BlockListManager.datetime") as mock_dt:
+            mock_dt.now.return_value = when
+            return self.db._backup_name(label, suffix)
+
+    def test_timestamp_comes_first(self):
+        name = self._at(datetime(2026, 8, 4, 11, 35, 59), "block", ".txt")
+        self.assertEqual(name, "2026-08-04_11_35_59-block.txt")
+
+    def test_named_location_backup(self):
+        name = self._at(datetime(2026, 8, 4, 11, 35, 59), "named_location", ".json")
+        self.assertEqual(name, "2026-08-04_11_35_59-named_location.json")
+
+    def test_alphabetical_order_matches_chronological_order(self):
+        # Zero-padded fixed-width fields, so a plain string sort is a time sort.
+        # Crosses hour, day, month and year boundaries — where naive formats break.
+        moments = [
+            datetime(2025, 12, 31, 23, 59, 59),
+            datetime(2026, 1, 1, 0, 0, 0),
+            datetime(2026, 1, 9, 9, 9, 9),
+            datetime(2026, 1, 10, 10, 10, 10),
+            datetime(2026, 9, 2, 8, 5, 1),
+            datetime(2026, 10, 2, 8, 5, 1),
+        ]
+        names = [self._at(m, "block", ".txt") for m in moments]
+        self.assertEqual(sorted(names), names)
+
+    def test_differing_labels_do_not_disturb_time_order(self):
+        # "allow" sorts before "block" alphabetically; a later allow backup must
+        # still sort after an earlier block backup.
+        earlier = self._at(datetime(2026, 8, 4, 10, 0, 0), "block", ".txt")
+        later = self._at(datetime(2026, 8, 4, 11, 0, 0), "allow", ".txt")
+        self.assertEqual(sorted([later, earlier]), [earlier, later])
+
+
+# ---------------------------------------------------------------------------
 # export_lists — backup + integrity verification
 # ---------------------------------------------------------------------------
 
@@ -602,8 +647,11 @@ class TestExportBackup(unittest.TestCase):
         self.db.export_lists()  # both files now exist -> triggers backup path for each
         backups = os.listdir("backups")
         self.assertEqual(len(backups), 2)  # one for block.txt, one for allow.txt
-        self.assertTrue(any(b.startswith("block-") for b in backups))
-        self.assertTrue(any(b.startswith("allow-") for b in backups))
+        # Timestamp leads, so an alphabetical listing is chronological.
+        self.assertTrue(any(b.endswith("-block.txt") for b in backups))
+        self.assertTrue(any(b.endswith("-allow.txt") for b in backups))
+        for b in backups:
+            self.assertRegex(b, r"^\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2}-")
 
     def test_export_writes_active_cidrs_only(self):
         with patch("BlockListManager.getpass.getuser", return_value="testuser"):
