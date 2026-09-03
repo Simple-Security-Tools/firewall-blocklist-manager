@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from dotenv import dotenv_values
 from microsoft_graph_helpers import get_bearer_token, get_named_location, update_named_location
 
-from colorama import init, Fore
+from colorama import init, Fore, Back, Style
 init(autoreset=True)
 
 def err(msg):
@@ -911,6 +911,51 @@ class IPDatabase:
         """
         return f"{datetime.now().strftime('%Y-%m-%d_%H_%M_%S')}-{label}{suffix}"
 
+    # Prefix lengths at which a rule stops being routine. A rule WIDER than
+    # 'confirm' demands a typed confirmation; wider than 'refuse' is rejected
+    # outright and cannot be forced.
+    #
+    # IPv4 mirrors the operational units: /24 is the smallest normally-routed
+    # block, /16 the widest anyone should ever need to block in one go. IPv6
+    # uses the analogous units — /48 is a site, /32 a large allocation — so an
+    # ordinary /64 host block stays frictionless rather than tripping a guard
+    # calibrated for IPv4 arithmetic.
+    SIZE_LIMITS = {
+        4: {"confirm": 24, "refuse": 16},
+        6: {"confirm": 48, "refuse": 32},
+    }
+
+    def _size_verdict(self, net_obj):
+        """Returns 'ok', 'confirm' or 'refuse' for the breadth of net_obj."""
+        limits = self.SIZE_LIMITS[net_obj.version]
+        if net_obj.prefixlen < limits["refuse"]:
+            return "refuse"
+        if net_obj.prefixlen < limits["confirm"]:
+            return "confirm"
+        return "ok"
+
+    def _confirm_oversized(self, net_obj, policy):
+        """
+        Loud, unmissable prompt for a rule wider than the confirm threshold.
+        Requires the operator to retype the range exactly — a bare 'y' is too
+        easy to hit by reflex on something this destructive.
+        """
+        banner = f"  !!  LARGE {policy} RANGE  —  {net_obj}  covers {net_obj.num_addresses:,} addresses  !!  "
+        edge = " " * len(banner)
+        loud = Back.RED + Fore.WHITE + Style.BRIGHT
+        print("")
+        print(loud + edge + Style.RESET_ALL)
+        print(loud + banner + Style.RESET_ALL)
+        print(loud + edge + Style.RESET_ALL)
+        warn(f"\nThis will {policy.lower()} every address in {net_obj}.")
+        warn("Check the prefix length carefully — /16 is 256x wider than /24.")
+
+        typed = input(f"\nType the range exactly to confirm (or anything else to abort): ").strip()
+        if typed != str(net_obj):
+            err("Aborted — input did not match.")
+            return False
+        return True
+
     def _resolve(self, path):
         """Anchors a relative path to the install directory; leaves absolute ones alone."""
         p = Path(path)
@@ -1079,6 +1124,23 @@ accept IPs and CIDRs.
   run with a REACTIVATED audit entry. A temporary wide sweep therefore never
   silently cancels a narrower permanent block.
 
+--- Rule Breadth ---
+
+  Rules are gated on how much of the internet they cover, so one mistyped
+  prefix cannot lock out a tenant:
+
+    IPv4   /24 or narrower   proceeds normally
+           /23 to /16        requires retyping the range to confirm
+           wider than /16    refused outright, cannot be forced
+
+    IPv6   /48 or narrower   proceeds normally
+           /47 to /32        requires retyping the range to confirm
+           wider than /32    refused outright, cannot be forced
+
+  The IPv6 thresholds track the equivalent operational units (a site is a /48,
+  a large allocation a /32), so an ordinary /64 host block is unaffected.
+  The guard applies to both block and allow, and --test does not bypass it.
+
 --- Whitelist ---
 
   If whitelist.txt exists in the working directory, any block/deny command
@@ -1179,6 +1241,23 @@ accept IPs and CIDRs.
                 sys.exit(1)
 
             targets, start_ip, end_ip = db.expand_range(args.target)
+
+            # Breadth gate, before anything is written or any detail prompted
+            # for. Refusals are checked across every expanded CIDR first, so an
+            # oversized range is rejected outright rather than after the
+            # operator has already confirmed some of its parts.
+            for net_obj in targets:
+                if db._size_verdict(net_obj) == "refuse":
+                    limit = db.SIZE_LIMITS[net_obj.version]["refuse"]
+                    err(f"[!] REFUSED: {net_obj} is wider than /{limit} "
+                        f"({net_obj.num_addresses:,} addresses).")
+                    err(f"    Rules this broad are not permitted. Split it into /{limit} "
+                        f"or narrower blocks if this is genuinely intended.")
+                    sys.exit(1)
+            for net_obj in targets:
+                if db._size_verdict(net_obj) == "confirm" and not db._confirm_oversized(net_obj, policy):
+                    sys.exit(1)
+
             if start_ip and not db._confirm_large_range(start_ip, end_ip, targets):
                 err("Aborted.")
                 sys.exit(1)

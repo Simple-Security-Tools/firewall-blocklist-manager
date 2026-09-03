@@ -98,6 +98,33 @@ FILE_OUTPUT_ALLOW=/etc/firewall/allowlist.txt
 
 ---
 
+## Rule Breadth
+
+Rules are gated on how much address space they cover, so a single mistyped
+prefix cannot lock out a tenant.
+
+| Family | Size | Behavior |
+|--------|------|----------|
+| IPv4 | `/24` or narrower | Proceeds normally |
+| IPv4 | `/23` – `/16` | Red warning; the operator must **retype the range exactly** to confirm |
+| IPv4 | wider than `/16` | Refused outright — cannot be forced |
+| IPv6 | `/48` or narrower | Proceeds normally |
+| IPv6 | `/47` – `/32` | Red warning; retype to confirm |
+| IPv6 | wider than `/32` | Refused outright |
+
+Confirmation deliberately does not accept `y`. A destructive rule should not be
+one reflex keystroke away, so the range must be retyped character for character.
+
+The IPv6 thresholds track the equivalent operational units — a site is a `/48`,
+a large allocation a `/32` — so an ordinary `/64` host block never trips the
+guard. The gate applies to both `block` and `allow`, and `--test` does **not**
+bypass it: it relaxes the routability check only.
+
+If a rule genuinely needs to be wider than the refusal threshold, split it into
+permitted blocks. The limits live in `IPDatabase.SIZE_LIMITS`.
+
+---
+
 ## Whitelist
 
 If a `whitelist.txt` file exists in the working directory, any `block` or `deny` command targeting an IP or range that overlaps a whitelisted entry will be rejected immediately — no prompts, no database write. Overlap is checked in both directions: a `/16` that merely contains one whitelisted `/32` is rejected too.

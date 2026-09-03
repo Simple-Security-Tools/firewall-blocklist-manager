@@ -601,6 +601,76 @@ class TestBackupName(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# rule breadth guard
+# ---------------------------------------------------------------------------
+
+class TestSizeVerdict(unittest.TestCase):
+    """
+    Wider than /24 needs a typed confirmation; wider than /16 is refused
+    outright. One mistyped prefix should not be able to block the internet.
+    """
+
+    def setUp(self):
+        self.db = make_db()
+
+    def v(self, cidr):
+        return self.db._size_verdict(ipaddress.ip_network(cidr))
+
+    def test_ipv4_routine_sizes_pass_silently(self):
+        for cidr in ("1.2.3.4/32", "1.2.3.0/29", "1.2.3.0/24"):
+            self.assertEqual(self.v(cidr), "ok", cidr)
+
+    def test_ipv4_wider_than_24_needs_confirmation(self):
+        for cidr in ("1.2.2.0/23", "1.2.0.0/20", "1.2.0.0/17", "1.2.0.0/16"):
+            self.assertEqual(self.v(cidr), "confirm", cidr)
+
+    def test_ipv4_wider_than_16_is_refused(self):
+        for cidr in ("1.2.0.0/15", "1.0.0.0/8", "0.0.0.0/1", "0.0.0.0/0"):
+            self.assertEqual(self.v(cidr), "refuse", cidr)
+
+    def test_ipv4_boundaries_exactly(self):
+        # /24 is the last silent size, /16 the last permitted size.
+        self.assertEqual(self.v("1.2.3.0/24"), "ok")
+        self.assertEqual(self.v("1.2.2.0/23"), "confirm")
+        self.assertEqual(self.v("1.2.0.0/16"), "confirm")
+        self.assertEqual(self.v("1.2.0.0/15"), "refuse")
+
+    def test_ipv6_host_and_subnet_blocks_stay_silent(self):
+        # A plain IPv6 address expands to /64; that must not trip a guard
+        # calibrated for IPv4 arithmetic.
+        for cidr in ("2001:db8::1/128", "2001:db8::/64", "2001:db8::/48"):
+            self.assertEqual(self.v(cidr), "ok", cidr)
+
+    def test_ipv6_large_allocations_gated(self):
+        self.assertEqual(self.v("2001:db8::/47"), "confirm")
+        self.assertEqual(self.v("2001:db8::/32"), "confirm")
+        self.assertEqual(self.v("2001::/31"), "refuse")
+        self.assertEqual(self.v("::/0"), "refuse")
+
+
+class TestConfirmOversized(unittest.TestCase):
+    """Confirmation requires retyping the range — a reflex 'y' must not pass."""
+
+    def setUp(self):
+        self.db = make_db()
+        self.net = ipaddress.ip_network("45.33.0.0/18")
+
+    def test_exact_retype_confirms(self):
+        with patch("builtins.input", return_value="45.33.0.0/18"), patch("builtins.print"):
+            self.assertTrue(self.db._confirm_oversized(self.net, "BLOCK"))
+
+    def test_yes_is_not_enough(self):
+        for answer in ("y", "yes", "Y", ""):
+            with patch("builtins.input", return_value=answer), patch("builtins.print"):
+                self.assertFalse(self.db._confirm_oversized(self.net, "BLOCK"),
+                                 f"{answer!r} should not confirm")
+
+    def test_surrounding_whitespace_is_tolerated(self):
+        with patch("builtins.input", return_value="  45.33.0.0/18  "), patch("builtins.print"):
+            self.assertTrue(self.db._confirm_oversized(self.net, "BLOCK"))
+
+
+# ---------------------------------------------------------------------------
 # base_dir anchoring
 # ---------------------------------------------------------------------------
 
