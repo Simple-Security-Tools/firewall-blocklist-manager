@@ -10,8 +10,11 @@ import tempfile
 import logging
 from pathlib import Path
 
-# Ensure the project root is on the path
-sys.path.insert(0, os.path.dirname(__file__))
+# Ensure the project root is on the path — this file's parent is tests/, which
+# does not contain the module. Without going up one level the import resolves
+# only because `python -m pytest` happens to put the caller's cwd on sys.path,
+# so the suite passes from the repository root and fails from anywhere else.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from BlocklistManager import IPDatabase
 
