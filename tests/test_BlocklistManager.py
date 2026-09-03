@@ -745,12 +745,12 @@ class TestBaseDir(unittest.TestCase):
     def test_data_lands_in_install_dir_not_cwd(self):
         db = IPDatabase(base_dir=self.install)
         db.close()
-        for d in ("database", "logs", "rules", "reports", "backups"):
+        for d in ("data", "logs", "rules", "reports", "backups"):
             self.assertTrue(os.path.isdir(os.path.join(self.install, d)), f"{d} missing")
             self.assertFalse(os.path.exists(os.path.join(self.elsewhere, d)),
                              f"{d} was created in the caller's cwd")
         self.assertTrue(os.path.exists(
-            os.path.join(self.install, "database", "ip_manager.db")))
+            os.path.join(self.install, "data", "ip_manager.db")))
 
     def test_whitelist_is_read_from_install_dir(self):
         # A whitelist in the cwd must be ignored; the install's is what counts.

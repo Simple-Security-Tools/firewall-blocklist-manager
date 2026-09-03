@@ -60,7 +60,7 @@ python BlocklistManager.py <command> [target] [options]
 The tool creates the following directories automatically on first run, relative to the current working directory:
 
 ```
-database/    SQLite database file
+data/        SQLite database file
 logs/        Audit log (audit.log)
 rules/       Exported rule files
 reports/     CSV audit reports

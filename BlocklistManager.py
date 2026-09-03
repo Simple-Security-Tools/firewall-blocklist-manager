@@ -47,7 +47,7 @@ class IPDatabase:
         self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
 
         # Ensure required directories exist
-        for d in ("database", "logs", "rules", "reports", "backups"):
+        for d in ("data", "logs", "rules", "reports", "backups"):
             (self.base_dir / d).mkdir(exist_ok=True)
 
         # Setup Python Logging Module
@@ -61,7 +61,7 @@ class IPDatabase:
             self.logger.addHandler(handler)
 
         # Initialize Database
-        db_path = self.base_dir / "database" / db_name
+        db_path = self.base_dir / "data" / db_name
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self._create_table()

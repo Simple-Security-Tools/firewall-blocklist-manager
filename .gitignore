@@ -6,6 +6,8 @@ __pycache__/
 
 # Runtime state and output — never commit
 backups/
+data/
+# pre-rename location; kept so an old database is never committed
 database/
 logs/
 reports/
