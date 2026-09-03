@@ -1,11 +1,17 @@
-# Simple Firewall Blocklist Manager
+# Firewall Blocklist Manager
 
-A command-line tool for managing firewall IP block/allow rules in a local SQLite
-database, with audit logging, rule expiration, whitelist protection, flat-file
-export, and one-way sync to a Microsoft Entra Conditional Access Named Location.
+One authoritative IP blocklist for hybrid environments â€” enforced at the network
+edge and in cloud identity from a single source of truth.
+
+Rules live in a local SQLite database with full audit history, expiration and
+whitelist protection. The same rule set publishes to flat files for firewall
+ingestion and to a Microsoft Entra Conditional Access Named Location, so the
+perimeter and Conditional Access cannot drift apart. Publishing is deliberately
+separate from rule management: additional targets can be added without changing
+how rules are written, reviewed or audited.
 
 Full command reference: [DOCUMENTATION.md](DOCUMENTATION.md), or run
-`python BlockListManager.py --help`.
+`python BlocklistManager.py --help`.
 
 ## Quickstart
 
@@ -44,7 +50,7 @@ keeps its database, logs, rules, reports, backups, config and whitelist there â€
 never in the directory you happen to be standing in. So `blocklist list` from
 anywhere reads the same database, and the whitelist is always enforced.
 
-`python BlockListManager.py ...` still works if you prefer, as long as you use
+`python BlocklistManager.py ...` still works if you prefer, as long as you use
 the venv's interpreter (`.venv/bin/python`).
 
 `block`, `allow` and `remove` prompt for an incident/ticket ID, a comment, and

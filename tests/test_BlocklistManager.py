@@ -13,7 +13,7 @@ from pathlib import Path
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(__file__))
 
-from BlockListManager import IPDatabase
+from BlocklistManager import IPDatabase
 
 
 # ---------------------------------------------------------------------------
@@ -25,12 +25,12 @@ def make_db():
     Returns an IPDatabase instance backed by an in-memory SQLite database,
     with config and whitelist mocked out so no files are needed.
     """
-    with patch("BlockListManager.dotenv_values", return_value={"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}), \
-         patch("BlockListManager.Path.mkdir"), \
+    with patch("BlocklistManager.dotenv_values", return_value={"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}), \
+         patch("BlocklistManager.Path.mkdir"), \
          patch.object(IPDatabase, "_load_whitelist", return_value=[]):
         db = IPDatabase.__new__(IPDatabase)
         # Tests that touch the filesystem chdir into a scratch directory, so
-        # anchor to cwd rather than the real install next to BlockListManager.py.
+        # anchor to cwd rather than the real install next to BlocklistManager.py.
         db.base_dir = Path(".")
         db.config = {"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}
         db.deny_mode = False
@@ -172,14 +172,14 @@ class TestAddEntry(unittest.TestCase):
         self.db.add_entry(cidr, inc_id=inc_id, policy=policy, expires_at=expires_at)
 
     def test_add_block_rule(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self._add("1.2.3.4/32")
         rows = self.db.conn.execute("SELECT * FROM ip_ranges").fetchall()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["policy"], "BLOCK")
 
     def test_redundant_smaller_range_marked(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self._add("1.2.3.4/32")
             self._add("1.2.3.0/24")  # broader range — should mark /32 redundant
         active = self.db.conn.execute(
@@ -194,10 +194,10 @@ class TestAddEntry(unittest.TestCase):
             self._add("1.2.3.4/32", policy="ALLOW")
 
     def test_conflict_check_prompts(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self._add("1.2.3.4/32", policy="ALLOW")
         with patch("builtins.input", return_value="y"), \
-             patch("BlockListManager.getpass.getuser", return_value="testuser"):
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self._add("1.2.3.4/32", policy="BLOCK")
         rows = self.db.conn.execute(
             "SELECT * FROM ip_ranges WHERE is_redundant = 0"
@@ -215,18 +215,18 @@ class TestRemoveEntry(unittest.TestCase):
 
     def setUp(self):
         self.db = make_db()
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.3.4/32", inc_id="INC001")
 
     def test_remove_existing(self):
         with patch("builtins.input", side_effect=["y", "INC002", "removing"]), \
-             patch("BlockListManager.getpass.getuser", return_value="testuser"):
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.remove_entry("1.2.3.4")
         rows = self.db.conn.execute("SELECT * FROM ip_ranges").fetchall()
         self.assertEqual(len(rows), 0)
 
     def test_remove_nonexistent_prints_error(self):
-        with patch("BlockListManager.err") as mock_err:
+        with patch("BlocklistManager.err") as mock_err:
             self.db.remove_entry("9.9.9.9")
         mock_err.assert_called()
 
@@ -245,7 +245,7 @@ class TestSearchIp(unittest.TestCase):
 
     def setUp(self):
         self.db = make_db()
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.3.0/24", inc_id="INC001")
 
     def test_search_covered_ip_returns_result(self):
@@ -255,13 +255,13 @@ class TestSearchIp(unittest.TestCase):
         self.assertIn("1.2.3.0/24", output)
 
     def test_search_uncovered_ip_warns(self):
-        with patch("BlockListManager.warn") as mock_warn:
+        with patch("BlocklistManager.warn") as mock_warn:
             self.db.search_ip("8.8.8.8")
         mock_warn.assert_called()
 
     def test_search_excludes_redundant(self):
         # Add a broader range to make the /24 redundant
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.0.0/16", inc_id="INC002")
         results = self.db.conn.execute(
             "SELECT * FROM ip_ranges WHERE is_redundant = 0"
@@ -386,7 +386,7 @@ class TestReactivateUncovered(unittest.TestCase):
             "SELECT cidr, is_redundant FROM ip_ranges").fetchall())
 
     def test_indefinite_child_returns_when_covering_rule_expires(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("5.5.5.5/32", inc_id="INC001", expires_at=None)
             self.db.add_entry("5.5.0.0/16", inc_id="INC002",
                               expires_at=(datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"))
@@ -400,7 +400,7 @@ class TestReactivateUncovered(unittest.TestCase):
         self.assertEqual(self._state()["5.5.5.5/32"], 0)
 
     def test_child_stays_redundant_while_covering_rule_is_active(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("5.5.5.5/32", inc_id="INC001")
             self.db.add_entry("5.5.0.0/16", inc_id="INC002")
 
@@ -408,7 +408,7 @@ class TestReactivateUncovered(unittest.TestCase):
         self.assertEqual(self._state()["5.5.5.5/32"], 1)
 
     def test_nested_reactivation_keeps_grandchild_suppressed(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("6.6.6.6/32", inc_id="INC001")
             self.db.add_entry("6.6.6.0/24", inc_id="INC002")
             self.db.add_entry("6.6.0.0/16", inc_id="INC003")
@@ -426,7 +426,7 @@ class TestReactivateUncovered(unittest.TestCase):
         # The BLOCK /16 overlaps an existing ALLOW rule, so add_entry() raises a
         # conflict prompt — answer it, or the row is never inserted and this
         # test silently stops testing anything.
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"), \
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"), \
              patch("builtins.input", return_value="y"):
             self.assertTrue(self.db.add_entry("7.7.7.7/32", inc_id="INC001", policy="ALLOW"))
             self.assertTrue(self.db.add_entry("7.7.0.0/16", inc_id="INC002", policy="ALLOW"))
@@ -446,7 +446,7 @@ class TestReactivateUncovered(unittest.TestCase):
             "an ALLOW child must not be held down by an active BLOCK rule")
 
     def test_expired_child_is_not_reactivated(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("8.8.8.8/32", inc_id="INC001")
             self.db.add_entry("8.8.0.0/16", inc_id="INC002")
 
@@ -456,7 +456,7 @@ class TestReactivateUncovered(unittest.TestCase):
         self.assertEqual(self.db.reactivate_uncovered(verbose=False), [])
 
     def test_reactivation_is_audited(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("9.9.9.9/32", inc_id="INC001")
             self.db.add_entry("9.9.0.0/16", inc_id="INC002")
 
@@ -477,7 +477,7 @@ class TestPurgeRedundant(unittest.TestCase):
     def setUp(self):
         self.db = make_db()
         # Add a broader range to create a redundant record
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.3.4/32", inc_id="INC001")
             self.db.add_entry("1.2.3.0/24", inc_id="INC002")
 
@@ -520,12 +520,12 @@ class TestCarveOut(unittest.TestCase):
 
     def setUp(self):
         self.db = make_db()
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("192.168.0.0/24", inc_id="INC001")
 
     def test_carve_single_host_out_of_block(self):
         with patch("builtins.input", side_effect=["y", "INC002", "exempt host", "y"]), \
-             patch("BlockListManager.getpass.getuser", return_value="testuser"):
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.remove_entry("192.168.0.25/32")
 
         rows = self.db.conn.execute(
@@ -567,7 +567,7 @@ class TestCarveOut(unittest.TestCase):
 
     def test_carve_logs_audit_event(self):
         with patch("builtins.input", side_effect=["y", "INC002", "exempt host", "y"]), \
-             patch("BlockListManager.getpass.getuser", return_value="testuser"):
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.remove_entry("192.168.0.25/32")
         history = self.db.conn.execute(
             "SELECT * FROM audit_history WHERE event_type = 'CARVED'"
@@ -587,7 +587,7 @@ class TestBackupName(unittest.TestCase):
         self.db = make_db()
 
     def _at(self, when, label, suffix=""):
-        with patch("BlockListManager.datetime") as mock_dt:
+        with patch("BlocklistManager.datetime") as mock_dt:
             mock_dt.now.return_value = when
             return self.db._backup_name(label, suffix)
 
@@ -735,7 +735,7 @@ class TestBaseDir(unittest.TestCase):
 
     def tearDown(self):
         os.chdir(self.old_cwd)
-        logger = logging.getLogger("BlockListManager")
+        logger = logging.getLogger("BlocklistManager")
         for h in list(logger.handlers):
             h.close()
             logger.removeHandler(h)
@@ -765,15 +765,15 @@ class TestBaseDir(unittest.TestCase):
         self.assertEqual(loaded, ["9.9.9.9/32"])
 
     def test_defaults_to_the_scripts_own_directory(self):
-        import BlockListManager as B
+        import BlocklistManager as B
         self.assertEqual(IPDatabase.__init__.__defaults__[1], None)
         expected = Path(B.__file__).resolve().parent
         with patch.object(IPDatabase, "_create_table"), \
              patch.object(IPDatabase, "_load_whitelist", return_value=[]), \
              patch.object(IPDatabase, "reactivate_uncovered", return_value=[]), \
-             patch("BlockListManager.sqlite3.connect"), \
-             patch("BlockListManager.Path.mkdir"), \
-             patch("BlockListManager.logging.FileHandler"):
+             patch("BlocklistManager.sqlite3.connect"), \
+             patch("BlocklistManager.Path.mkdir"), \
+             patch("BlocklistManager.logging.FileHandler"):
             db = IPDatabase.__new__(IPDatabase)
             IPDatabase.__init__(db)
             self.assertEqual(db.base_dir, expected)
@@ -829,7 +829,7 @@ class TestBackupNameOrdering(unittest.TestCase):
         self.db = make_db()
 
     def _at(self, when, label, suffix=""):
-        with patch("BlockListManager.datetime") as mock_dt:
+        with patch("BlocklistManager.datetime") as mock_dt:
             mock_dt.now.return_value = when
             return self.db._backup_name(label, suffix)
 
@@ -869,7 +869,7 @@ class TestExportBackup(unittest.TestCase):
         os.chdir(self.tmpdir)
         os.makedirs("rules", exist_ok=True)
         os.makedirs("backups", exist_ok=True)
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.3.4/32", inc_id="INC001")
 
     def tearDown(self):
@@ -916,7 +916,7 @@ class TestExportBackup(unittest.TestCase):
             self.assertEqual(f.read().strip(), "1.2.3.4/32")
 
     def test_export_writes_active_cidrs_only(self):
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.3.0/24", inc_id="INC002")  # makes /32 redundant
         self.db.export_lists()
         with open("rules/block.txt") as f:
@@ -931,7 +931,7 @@ class TestExportBackup(unittest.TestCase):
     def test_backup_failure_prompts_and_skips_on_no(self):
         # Force the copy step to fail so the integrity check can't pass
         self.db.export_lists()  # create rules/block.txt
-        with patch("BlockListManager.shutil.copy2", side_effect=OSError("disk full")), \
+        with patch("BlocklistManager.shutil.copy2", side_effect=OSError("disk full")), \
              patch("builtins.input", return_value="n"):
             self.db.export_lists()
         # Original file should be untouched since the operator declined
@@ -941,9 +941,9 @@ class TestExportBackup(unittest.TestCase):
 
     def test_backup_failure_overwrites_on_yes(self):
         self.db.export_lists()
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("5.6.7.8/32", inc_id="INC003")
-        with patch("BlockListManager.shutil.copy2", side_effect=OSError("disk full")), \
+        with patch("BlocklistManager.shutil.copy2", side_effect=OSError("disk full")), \
              patch("builtins.input", return_value="y"):
             self.db.export_lists()
         with open("rules/block.txt") as f:
@@ -975,7 +975,7 @@ class TestSyncNamedLocation(unittest.TestCase):
             "SECRET": "s",
             "BLOCKLIST_NAMED_LOCATION_ID": "loc-123",
         }
-        with patch("BlockListManager.getpass.getuser", return_value="testuser"):
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.add_entry("1.2.3.4/32", inc_id="INC001")
 
     def tearDown(self):
@@ -987,9 +987,9 @@ class TestSyncNamedLocation(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.db.sync_named_location()
 
-    @patch("BlockListManager.update_named_location", return_value=True)
-    @patch("BlockListManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
-    @patch("BlockListManager.get_bearer_token", return_value="fake-token")
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
     def test_sync_calls_graph_with_active_cidrs(self, mock_token, mock_get_loc, mock_update):
         with patch.object(self.db, "export_lists"):
             self.db.sync_named_location()
@@ -1003,10 +1003,10 @@ class TestSyncNamedLocation(unittest.TestCase):
 
     def _sync_with(self, uuid, display_name):
         self.db.config["BLOCKLIST_NAMED_LOCATION_ID"] = uuid
-        with patch("BlockListManager.get_bearer_token", return_value="fake-token"), \
-             patch("BlockListManager.get_named_location",
+        with patch("BlocklistManager.get_bearer_token", return_value="fake-token"), \
+             patch("BlocklistManager.get_named_location",
                    return_value={"id": uuid, "displayName": display_name, "ipRanges": []}), \
-             patch("BlockListManager.update_named_location", return_value=True), \
+             patch("BlocklistManager.update_named_location", return_value=True), \
              patch.object(self.db, "export_lists"):
             self.db.sync_named_location()
 
@@ -1035,25 +1035,25 @@ class TestSyncNamedLocation(unittest.TestCase):
         self.assertEqual(len(backups), 1)
         self.assertRegex(backups[0], r"-named_location-0e697235\.json$")
 
-    @patch("BlockListManager.update_named_location", return_value=True)
-    @patch("BlockListManager.get_named_location", return_value=None)
-    @patch("BlockListManager.get_bearer_token", return_value="fake-token")
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value=None)
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
     def test_sync_continues_when_location_backup_fails(self, mock_token, mock_get_loc, mock_update):
         with patch.object(self.db, "export_lists"), \
-             patch("BlockListManager.warn") as mock_warn:
+             patch("BlocklistManager.warn") as mock_warn:
             self.db.sync_named_location()
         mock_warn.assert_called()
         mock_update.assert_called_once()
 
-    @patch("BlockListManager.update_named_location", return_value=False)
-    @patch("BlockListManager.get_named_location", return_value={"id": "loc-123"})
-    @patch("BlockListManager.get_bearer_token", return_value="fake-token")
+    @patch("BlocklistManager.update_named_location", return_value=False)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123"})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
     def test_update_failure_exits(self, mock_token, mock_get_loc, mock_update):
         with patch.object(self.db, "export_lists"):
             with self.assertRaises(SystemExit):
                 self.db.sync_named_location()
 
-    @patch("BlockListManager.get_bearer_token", side_effect=RuntimeError("token request failed"))
+    @patch("BlocklistManager.get_bearer_token", side_effect=RuntimeError("token request failed"))
     def test_token_failure_exits(self, mock_token):
         with patch.object(self.db, "export_lists"):
             with self.assertRaises(SystemExit):
@@ -1063,15 +1063,15 @@ class TestSyncNamedLocation(unittest.TestCase):
         self.db.conn.execute("DELETE FROM ip_ranges")
         self.db.conn.commit()
         with patch.object(self.db, "export_lists"), \
-             patch("BlockListManager.warn") as mock_warn, \
-             patch("BlockListManager.get_bearer_token") as mock_token:
+             patch("BlocklistManager.warn") as mock_warn, \
+             patch("BlocklistManager.get_bearer_token") as mock_token:
             self.db.sync_named_location()
         mock_warn.assert_called()
         mock_token.assert_not_called()
 
-    @patch("BlockListManager.update_named_location", return_value=True)
-    @patch("BlockListManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
-    @patch("BlockListManager.get_bearer_token", return_value="fake-token")
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
     def test_sync_logs_audit_event(self, mock_token, mock_get_loc, mock_update):
         with patch.object(self.db, "export_lists"):
             self.db.sync_named_location()

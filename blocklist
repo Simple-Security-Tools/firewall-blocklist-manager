@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stable launcher for BlockListManager, living in the repo (NOT in .venv).
+# Stable launcher for BlocklistManager, living in the repo (NOT in .venv).
 # Runs the script with the project's own interpreter, so there is never any
 # need to `activate` anything — activation only edits PATH, and naming
 # .venv/bin/python directly does the same job.
@@ -23,4 +23,4 @@ if [ ! -x "$py" ]; then
   echo "  create it with: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
   exit 1
 fi
-exec "$py" "$here/BlockListManager.py" "$@"
+exec "$py" "$here/BlocklistManager.py" "$@"
