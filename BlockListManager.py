@@ -6,6 +6,7 @@ import argparse
 import csv
 import getpass
 import logging
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -862,7 +863,11 @@ class IPDatabase:
         location_id = self.config["BLOCKLIST_NAMED_LOCATION_ID"]
         existing = get_named_location(bearer_token=token, uuid=location_id)
         if existing:
-            backup_name = self._backup_name("named_location", ".json")
+            # Name the backup after the location itself, plus the first block of
+            # its UUID. A tenant needs more than one Named Location once a list
+            # passes the 2000-CIDR cap, and these filenames stay distinct.
+            label = self._safe_label(existing.get("displayName"))
+            backup_name = self._backup_name(f"{label}-{location_id.split('-')[0]}", ".json")
             backup_path = Path("backups") / backup_name
             with open(backup_path, "w") as f:
                 json.dump(existing, f, indent=2)
@@ -893,6 +898,20 @@ class IPDatabase:
         is also chronological.
         """
         return f"{datetime.now().strftime('%Y-%m-%d_%H_%M_%S')}-{label}{suffix}"
+
+    @staticmethod
+    def _safe_label(text, fallback="named_location", limit=60):
+        """
+        Reduces an Entra display name to something usable in a filename:
+        whitespace becomes '-', and path separators and other awkward
+        characters are dropped. Returns the fallback if nothing usable is left,
+        so a location with an empty or emoji-only name still produces a valid
+        backup path.
+        """
+        cleaned = re.sub(r"\s+", "-", (text or "").strip())
+        cleaned = re.sub(r"[^A-Za-z0-9._-]", "", cleaned)
+        cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-._")
+        return cleaned[:limit] or fallback
 
     @staticmethod
     def _sha256(path):

@@ -591,8 +591,52 @@ class TestBackupName(unittest.TestCase):
         self.assertEqual(name, "2026-08-04_11_35_59-block.txt")
 
     def test_named_location_backup(self):
-        name = self._at(datetime(2026, 8, 4, 11, 35, 59), "named_location", ".json")
-        self.assertEqual(name, "2026-08-04_11_35_59-named_location.json")
+        name = self._at(datetime(2026, 8, 4, 11, 35, 59), "Campus-Blocklist-0e697235", ".json")
+        self.assertEqual(name, "2026-08-04_11_35_59-Campus-Blocklist-0e697235.json")
+
+
+# ---------------------------------------------------------------------------
+# _safe_label
+# ---------------------------------------------------------------------------
+
+class TestSafeLabel(unittest.TestCase):
+    """Entra display names are free text; they have to survive being a filename."""
+
+    def setUp(self):
+        self.db = make_db()
+
+    def test_spaces_become_hyphens(self):
+        self.assertEqual(self.db._safe_label("Campus Blocklist"), "Campus-Blocklist")
+
+    def test_path_separators_are_stripped(self):
+        # A name like this must not escape the backups/ directory.
+        self.assertEqual(self.db._safe_label("../../etc/passwd"), "etcpasswd")
+        self.assertNotIn("/", self.db._safe_label("a/b\\c"))
+
+    def test_runs_collapse_and_edges_trim(self):
+        self.assertEqual(self.db._safe_label("  Campus   —   Blocklist  "), "Campus-Blocklist")
+
+    def test_unusable_names_fall_back(self):
+        for name in (None, "", "   ", "🔥🔥"):
+            self.assertEqual(self.db._safe_label(name), "named_location")
+
+    def test_length_is_capped(self):
+        self.assertEqual(len(self.db._safe_label("x" * 500)), 60)
+
+    def test_ordinary_name_is_left_alone(self):
+        self.assertEqual(self.db._safe_label("Blocklist_v2.1"), "Blocklist_v2.1")
+
+
+class TestBackupNameOrdering(unittest.TestCase):
+    """The point of the timestamp-first format: string sort == time sort."""
+
+    def setUp(self):
+        self.db = make_db()
+
+    def _at(self, when, label, suffix=""):
+        with patch("BlockListManager.datetime") as mock_dt:
+            mock_dt.now.return_value = when
+            return self.db._backup_name(label, suffix)
 
     def test_alphabetical_order_matches_chronological_order(self):
         # Zero-padded fixed-width fields, so a plain string sort is a time sort.
@@ -735,6 +779,43 @@ class TestSyncNamedLocation(unittest.TestCase):
         _, kwargs = mock_update.call_args
         self.assertEqual(kwargs["values"], ["1.2.3.4/32"])
         self.assertEqual(kwargs["uuid"], "loc-123")
+
+    UUID_A = "0e697235-f6fa-4ce8-9a0c-4e4afe9bdb59"
+    UUID_B = "7c31af90-1234-4bcd-8888-aaaabbbbcccc"
+
+    def _sync_with(self, uuid, display_name):
+        self.db.config["BLOCKLIST_NAMED_LOCATION_ID"] = uuid
+        with patch("BlockListManager.get_bearer_token", return_value="fake-token"), \
+             patch("BlockListManager.get_named_location",
+                   return_value={"id": uuid, "displayName": display_name, "ipRanges": []}), \
+             patch("BlockListManager.update_named_location", return_value=True), \
+             patch.object(self.db, "export_lists"):
+            self.db.sync_named_location()
+
+    def test_backup_is_named_for_the_location(self):
+        self._sync_with(self.UUID_A, "Campus Blocklist")
+        backups = os.listdir("backups")
+        self.assertEqual(len(backups), 1)
+        self.assertRegex(
+            backups[0],
+            r"^\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2}-Campus-Blocklist-0e697235\.json$")
+
+    def test_two_locations_do_not_collide(self):
+        # The reason for including the UUID block: past the 2000-CIDR cap a
+        # tenant needs a second Named Location, and its backups must be
+        # distinguishable even if someone names both lists the same thing.
+        self._sync_with(self.UUID_A, "Blocklist")
+        self._sync_with(self.UUID_B, "Blocklist")
+        backups = sorted(os.listdir("backups"))
+        self.assertEqual(len(backups), 2, "second location overwrote the first's backup")
+        self.assertTrue(any(b.endswith("-Blocklist-0e697235.json") for b in backups))
+        self.assertTrue(any(b.endswith("-Blocklist-7c31af90.json") for b in backups))
+
+    def test_backup_falls_back_when_location_has_no_display_name(self):
+        self._sync_with(self.UUID_A, None)
+        backups = os.listdir("backups")
+        self.assertEqual(len(backups), 1)
+        self.assertRegex(backups[0], r"-named_location-0e697235\.json$")
 
     @patch("BlockListManager.update_named_location", return_value=True)
     @patch("BlockListManager.get_named_location", return_value=None)

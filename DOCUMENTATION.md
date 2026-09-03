@@ -322,9 +322,33 @@ Redundant records are retained in the database for audit purposes until explicit
 Before overwriting an export file, the tool:
 
 1. Computes the SHA-256 hash of the existing file.
-2. Copies the file to `backups/<filename>-YYYY-DD-MM_HH_MM_SS.txt`.
+2. Copies the file to `backups/YYYY-MM-DD_HH_MM_SS-<filename>.txt`.
 3. Computes the SHA-256 hash of the backup.
 4. Compares the two hashes.
+
+### Backup filenames
+
+Backups lead with the timestamp, so a plain alphabetical listing in Finder or
+any file browser is also chronological:
+
+```
+2026-09-03_08_01_16-palo-blocks.txt
+2026-09-03_08_01_16-Campus-Blocklist-0e697235.json
+```
+
+`sync` names its Named Location backup after the location itself, followed by
+the first block of the location's UUID:
+
+```
+YYYY-MM-DD_HH_MM_SS-<display name>-<uuid prefix>.json
+```
+
+The UUID prefix is there because a single Named Location holds at most 2000
+CIDRs; past that a tenant needs a second one, and its backups have to stay
+distinguishable even if both lists are given the same display name. Display
+names are free text, so spaces become `-`, path separators and other awkward
+characters are dropped, and the name is capped at 60 characters. A location
+with no usable display name falls back to `named_location`.
 
 If the hashes match, the export proceeds and the backup is confirmed with `(verified)`.
 
