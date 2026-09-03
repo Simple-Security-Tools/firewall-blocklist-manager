@@ -7,6 +7,8 @@ import shutil
 import sys
 import os
 import tempfile
+import logging
+from pathlib import Path
 
 # Ensure the project root is on the path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -27,6 +29,9 @@ def make_db():
          patch("BlockListManager.Path.mkdir"), \
          patch.object(IPDatabase, "_load_whitelist", return_value=[]):
         db = IPDatabase.__new__(IPDatabase)
+        # Tests that touch the filesystem chdir into a scratch directory, so
+        # anchor to cwd rather than the real install next to BlockListManager.py.
+        db.base_dir = Path(".")
         db.config = {"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}
         db.deny_mode = False
         db.whitelist = []
@@ -593,6 +598,80 @@ class TestBackupName(unittest.TestCase):
     def test_named_location_backup(self):
         name = self._at(datetime(2026, 8, 4, 11, 35, 59), "Campus-Blocklist-0e697235", ".json")
         self.assertEqual(name, "2026-08-04_11_35_59-Campus-Blocklist-0e697235.json")
+
+
+# ---------------------------------------------------------------------------
+# base_dir anchoring
+# ---------------------------------------------------------------------------
+
+class TestBaseDir(unittest.TestCase):
+    """
+    The tool's files live next to the install, not in the caller's cwd — that
+    is what makes a launcher on PATH safe. Otherwise running it from elsewhere
+    creates a second, empty database and silently loads no whitelist.
+    """
+
+    def setUp(self):
+        self.install = tempfile.mkdtemp()
+        self.elsewhere = tempfile.mkdtemp()
+        self.old_cwd = os.getcwd()
+        os.chdir(self.elsewhere)
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        logger = logging.getLogger("BlockListManager")
+        for h in list(logger.handlers):
+            h.close()
+            logger.removeHandler(h)
+        shutil.rmtree(self.install, ignore_errors=True)
+        shutil.rmtree(self.elsewhere, ignore_errors=True)
+
+    def test_data_lands_in_install_dir_not_cwd(self):
+        db = IPDatabase(base_dir=self.install)
+        db.close()
+        for d in ("database", "logs", "rules", "reports", "backups"):
+            self.assertTrue(os.path.isdir(os.path.join(self.install, d)), f"{d} missing")
+            self.assertFalse(os.path.exists(os.path.join(self.elsewhere, d)),
+                             f"{d} was created in the caller's cwd")
+        self.assertTrue(os.path.exists(
+            os.path.join(self.install, "database", "ip_manager.db")))
+
+    def test_whitelist_is_read_from_install_dir(self):
+        # A whitelist in the cwd must be ignored; the install's is what counts.
+        with open(os.path.join(self.elsewhere, "whitelist.txt"), "w") as f:
+            f.write("8.8.8.8\n")
+        with open(os.path.join(self.install, "whitelist.txt"), "w") as f:
+            f.write("9.9.9.9\n")
+
+        db = IPDatabase(base_dir=self.install)
+        loaded = [str(n) for n in db.whitelist]
+        db.close()
+        self.assertEqual(loaded, ["9.9.9.9/32"])
+
+    def test_defaults_to_the_scripts_own_directory(self):
+        import BlockListManager as B
+        self.assertEqual(IPDatabase.__init__.__defaults__[1], None)
+        expected = Path(B.__file__).resolve().parent
+        with patch.object(IPDatabase, "_create_table"), \
+             patch.object(IPDatabase, "_load_whitelist", return_value=[]), \
+             patch.object(IPDatabase, "reactivate_uncovered", return_value=[]), \
+             patch("BlockListManager.sqlite3.connect"), \
+             patch("BlockListManager.Path.mkdir"), \
+             patch("BlockListManager.logging.FileHandler"):
+            db = IPDatabase.__new__(IPDatabase)
+            IPDatabase.__init__(db)
+            self.assertEqual(db.base_dir, expected)
+
+    def test_relative_output_paths_anchor_to_install(self):
+        db = IPDatabase(base_dir=self.install)
+        try:
+            self.assertEqual(db._resolve("rules/block.txt"),
+                             Path(self.install) / "rules/block.txt")
+            # Absolute paths are left exactly as configured.
+            self.assertEqual(db._resolve("/etc/firewall/blocklist.txt"),
+                             Path("/etc/firewall/blocklist.txt"))
+        finally:
+            db.close()
 
 
 # ---------------------------------------------------------------------------

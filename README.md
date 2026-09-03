@@ -11,12 +11,15 @@ Full command reference: [DOCUMENTATION.md](DOCUMENTATION.md), or run
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 
 cp config.txt.example config.txt
 cp whitelist.txt.example whitelist.txt   # then edit — see below
 ```
+
+No `activate` step: use the `./blocklist` launcher, which runs the script with
+the project's own interpreter. Activation only edits `PATH`, and the launcher
+names `.venv/bin/python` directly instead.
 
 Edit `whitelist.txt` before adding any rules. It lists the networks that must
 never be blocked. Until it exists, nothing is protected and the tool warns on
@@ -25,10 +28,24 @@ every run.
 Then:
 
 ```bash
-python BlockListManager.py block 45.33.32.156
-python BlockListManager.py list
-python BlockListManager.py export
+./blocklist block 45.33.32.156
+./blocklist list
+./blocklist export
 ```
+
+To run it from anywhere, symlink the launcher onto your `PATH`:
+
+```bash
+ln -s "$PWD/blocklist" ~/bin/blocklist
+```
+
+The launcher resolves symlinks to find its own install directory, and the tool
+keeps its database, logs, rules, reports, backups, config and whitelist there —
+never in the directory you happen to be standing in. So `blocklist list` from
+anywhere reads the same database, and the whitelist is always enforced.
+
+`python BlockListManager.py ...` still works if you prefer, as long as you use
+the venv's interpreter (`.venv/bin/python`).
 
 `block`, `allow` and `remove` prompt for an incident/ticket ID, a comment, and
 an expiration; every change is written to `logs/audit.log` and the

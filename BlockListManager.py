@@ -31,8 +31,15 @@ def ok(msg):
 
 
 class IPDatabase:
-    def __init__(self, db_name="ip_manager.db"):
-        config_path = Path(__file__).parent / "config.txt"
+    def __init__(self, db_name="ip_manager.db", base_dir=None):
+        # Everything this tool owns — database, logs, rules, reports, backups,
+        # config and whitelist — lives next to the script, not in whatever
+        # directory it happens to be invoked from. Otherwise running it from
+        # elsewhere silently creates a second, empty database and finds no
+        # whitelist, which is exactly what a launcher on PATH would do.
+        self.base_dir = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+
+        config_path = self.base_dir / "config.txt"
         if not config_path.exists():
             warn(f"[!] config.txt not found at {config_path} — using defaults.")
         self.config = dotenv_values(config_path)
@@ -40,14 +47,11 @@ class IPDatabase:
         self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
 
         # Ensure required directories exist
-        Path("database").mkdir(exist_ok=True)
-        Path("logs").mkdir(exist_ok=True)
-        Path("rules").mkdir(exist_ok=True)
-        Path("reports").mkdir(exist_ok=True)
-        Path("backups").mkdir(exist_ok=True)
+        for d in ("database", "logs", "rules", "reports", "backups"):
+            (self.base_dir / d).mkdir(exist_ok=True)
 
         # Setup Python Logging Module
-        log_file = Path("logs") / "audit.log"
+        log_file = self.base_dir / "logs" / "audit.log"
         self.logger = logging.getLogger("BlockListManager")
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
@@ -57,7 +61,7 @@ class IPDatabase:
             self.logger.addHandler(handler)
 
         # Initialize Database
-        db_path = Path("database") / db_name
+        db_path = self.base_dir / "database" / db_name
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self._create_table()
@@ -228,7 +232,7 @@ class IPDatabase:
 
         return revived
 
-    def _load_whitelist(self, path="whitelist.txt"):
+    def _load_whitelist(self, path=None):
         """
         Loads whitelist.txt and returns a list of ip_network objects.
         - Lines starting with # are full-line comments and are skipped.
@@ -239,7 +243,7 @@ class IPDatabase:
         - Invalid entries are warned about and skipped.
         """
         whitelist = []
-        wl_path = Path(path)
+        wl_path = Path(path) if path else self.base_dir / "whitelist.txt"
 
         if not wl_path.exists():
             # Say so loudly. A missing file silently disables the only guard
@@ -775,6 +779,9 @@ class IPDatabase:
             'BLOCK': self.config.get("FILE_OUTPUT_DENY") or str(Path("rules") / "block.txt"),
             'ALLOW': self.config.get("FILE_OUTPUT_ALLOW") or str(Path("rules") / "allow.txt"),
         }
+        # A relative FILE_OUTPUT_* is relative to the install, not the caller's
+        # cwd. Absolute paths (/etc/firewall/...) are left alone.
+        output_paths = {k: self._resolve(v) for k, v in output_paths.items()}
 
         for p in ['BLOCK', 'ALLOW']:
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -800,7 +807,7 @@ class IPDatabase:
             # a populated list with an empty one is exactly when a backup matters.
             if out_path.exists() and out_path.stat().st_size > 0:
                 backup_name = self._backup_name(out_path.stem, out_path.suffix)
-                backup_path = Path("backups") / backup_name
+                backup_path = self.base_dir / "backups" / backup_name
                 backup_ok = False
 
                 try:
@@ -873,7 +880,7 @@ class IPDatabase:
             # passes the 2000-CIDR cap, and these filenames stay distinct.
             label = self._safe_label(existing.get("displayName"))
             backup_name = self._backup_name(f"{label}-{location_id.split('-')[0]}", ".json")
-            backup_path = Path("backups") / backup_name
+            backup_path = self.base_dir / "backups" / backup_name
             with open(backup_path, "w") as f:
                 json.dump(existing, f, indent=2)
             print(f"[+] BACKUP: Named Location -> backups/{backup_name}")
@@ -903,6 +910,11 @@ class IPDatabase:
         is also chronological.
         """
         return f"{datetime.now().strftime('%Y-%m-%d_%H_%M_%S')}-{label}{suffix}"
+
+    def _resolve(self, path):
+        """Anchors a relative path to the install directory; leaves absolute ones alone."""
+        p = Path(path)
+        return p if p.is_absolute() else self.base_dir / p
 
     @staticmethod
     def _safe_label(text, fallback="named_location", limit=60):
@@ -972,7 +984,7 @@ class IPDatabase:
                                  ORDER BY created_at DESC
                                  """).fetchall()
 
-        with open(Path("reports") / fname, "w", newline='') as f:
+        with open(self.base_dir / "reports" / fname, "w", newline='') as f:
             writer = csv.writer(f)
             writer.writerow(
                 ["IP/CIDR", "Policy", "Version", "Incident ID", "Author", "Created", "Expires", "Is Redundant"])

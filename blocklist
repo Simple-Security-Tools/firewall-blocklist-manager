@@ -1,0 +1,26 @@
+#!/bin/sh
+# Stable launcher for BlockListManager, living in the repo (NOT in .venv).
+# Runs the script with the project's own interpreter, so there is never any
+# need to `activate` anything — activation only edits PATH, and naming
+# .venv/bin/python directly does the same job.
+#
+# The .venv stays disposable — delete it and recreate with:
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+# Resolve this script's real directory, following symlinks (so it works when
+# symlinked onto your PATH, e.g. ~/bin/blocklist -> .../blocklist).
+src="$0"
+while [ -h "$src" ]; do
+  dir="$(cd -P "$(dirname "$src")" && pwd)"
+  src="$(readlink "$src")"
+  case "$src" in /*) ;; *) src="$dir/$src" ;; esac
+done
+here="$(cd -P "$(dirname "$src")" && pwd)"
+
+py="$here/.venv/bin/python"
+if [ ! -x "$py" ]; then
+  echo "blocklist: no virtualenv at $here/.venv" >&2
+  echo "  create it with: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+  exit 1
+fi
+exec "$py" "$here/BlockListManager.py" "$@"
