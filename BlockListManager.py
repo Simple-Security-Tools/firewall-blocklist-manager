@@ -793,7 +793,12 @@ class IPDatabase:
             out_path = Path(output_paths[p])
             out_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if out_path.exists():
+            # Only back up a file that actually holds something. An empty list —
+            # allow.txt in DENY_ONLY mode, say — is re-exported on every run and
+            # would otherwise pile up empty backups with nothing to restore.
+            # The test is on the EXISTING file, not the new content: overwriting
+            # a populated list with an empty one is exactly when a backup matters.
+            if out_path.exists() and out_path.stat().st_size > 0:
                 backup_name = self._backup_name(out_path.stem, out_path.suffix)
                 backup_path = Path("backups") / backup_name
                 backup_ok = False

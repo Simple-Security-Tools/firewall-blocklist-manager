@@ -686,16 +686,39 @@ class TestExportBackup(unittest.TestCase):
         self.assertTrue(os.path.exists("rules/block.txt"))
         self.assertEqual(len(os.listdir("backups")), 0)
 
-    def test_second_export_creates_verified_backup(self):
+    def test_second_export_backs_up_only_the_populated_list(self):
         self.db.export_lists()
-        self.db.export_lists()  # both files now exist -> triggers backup path for each
+        self.db.export_lists()  # both files exist now -> backup path runs for each
         backups = os.listdir("backups")
-        self.assertEqual(len(backups), 2)  # one for block.txt, one for allow.txt
+        # block.txt has a rule; allow.txt is empty, so it is not worth backing up.
+        self.assertEqual(len(backups), 1)
+        self.assertTrue(backups[0].endswith("-block.txt"))
         # Timestamp leads, so an alphabetical listing is chronological.
-        self.assertTrue(any(b.endswith("-block.txt") for b in backups))
-        self.assertTrue(any(b.endswith("-allow.txt") for b in backups))
-        for b in backups:
-            self.assertRegex(b, r"^\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2}-")
+        self.assertRegex(backups[0], r"^\d{4}-\d{2}-\d{2}_\d{2}_\d{2}_\d{2}-")
+
+    def test_empty_file_is_never_backed_up(self):
+        # allow.txt stays empty across many exports and must not accumulate
+        # backups that hold nothing.
+        for _ in range(5):
+            self.db.export_lists()
+        self.assertEqual(os.path.getsize("rules/allow.txt"), 0)
+        self.assertEqual([b for b in os.listdir("backups") if b.endswith("-allow.txt")], [])
+
+    def test_populated_file_is_backed_up_even_when_new_content_is_empty(self):
+        # The dangerous direction: a populated blocklist about to be replaced by
+        # an empty one. That is precisely when the backup must be taken.
+        self.db.export_lists()
+        self.assertGreater(os.path.getsize("rules/block.txt"), 0)
+
+        self.db.conn.execute("DELETE FROM ip_ranges")
+        self.db.conn.commit()
+        self.db.export_lists()
+
+        self.assertEqual(os.path.getsize("rules/block.txt"), 0)
+        saved = [b for b in os.listdir("backups") if b.endswith("-block.txt")]
+        self.assertEqual(len(saved), 1)
+        with open(os.path.join("backups", saved[0])) as f:
+            self.assertEqual(f.read().strip(), "1.2.3.4/32")
 
     def test_export_writes_active_cidrs_only(self):
         with patch("BlockListManager.getpass.getuser", return_value="testuser"):

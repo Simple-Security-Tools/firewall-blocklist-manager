@@ -326,6 +326,14 @@ Before overwriting an export file, the tool:
 3. Computes the SHA-256 hash of the backup.
 4. Compares the two hashes.
 
+Empty files are not backed up — there is nothing to restore. In `DENY_ONLY`
+mode the allow list is always empty, so it would otherwise accumulate a useless
+backup on every single export.
+
+The check is on the **existing** file, not the new content. Replacing a
+populated block list with an empty one still takes a backup first; that is the
+case where losing the previous contents would hurt most.
+
 ### Backup filenames
 
 Backups lead with the timestamp, so a plain alphabetical listing in Finder or
