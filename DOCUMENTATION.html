@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlockListManager — Firewall Blocklist Manager</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 960px; margin: 40px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.6; }
+    h1 { border-bottom: 2px solid #1a1a1a; padding-bottom: 8px; }
+    h2 { border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-top: 48px; }
+    h3 { margin-top: 32px; }
+    code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: "SFMono-Regular", Consolas, monospace; font-size: 0.9em; }
+    pre { background: #f4f4f4; padding: 16px; border-radius: 4px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+    th { background: #f4f4f4; text-align: left; padding: 8px 12px; border: 1px solid #ccc; }
+    td { padding: 8px 12px; border: 1px solid #ccc; vertical-align: top; }
+    tr:nth-child(even) td { background: #fafafa; }
+    nav { background: #f4f4f4; padding: 16px 20px; border-radius: 4px; margin-bottom: 40px; }
+    nav ol { margin: 0; padding-left: 20px; }
+    nav li { margin: 4px 0; }
+    a { color: #0066cc; }
+    hr { border: none; border-top: 1px solid #ddd; margin: 48px 0; }
+  </style>
+</head>
+<body>
+
+<h1>BlockListManager — Firewall Blocklist Manager</h1>
+
+<p>A command-line tool for managing firewall IP block and allow rules in a local SQLite database, with audit logging, expiration support, whitelist protection, and rule export.</p>
+
+<hr>
+
+<nav>
+  <strong>Table of Contents</strong>
+  <ol>
+    <li><a href="#requirements">Requirements</a></li>
+    <li><a href="#installation">Installation</a></li>
+    <li><a href="#directory-structure">Directory Structure</a></li>
+    <li><a href="#configuration">Configuration</a></li>
+    <li><a href="#whitelist">Whitelist</a></li>
+    <li><a href="#usage">Usage</a>
+      <ol>
+        <li><a href="#block--deny">block / deny</a></li>
+        <li><a href="#allow">allow</a></li>
+        <li><a href="#remove">remove</a></li>
+        <li><a href="#search">search</a></li>
+        <li><a href="#export">export</a></li>
+        <li><a href="#list">list</a></li>
+        <li><a href="#report">report</a></li>
+        <li><a href="#purge">purge</a></li>
+      </ol>
+    </li>
+    <li><a href="#input-formats">Input Formats</a></li>
+    <li><a href="#expiration">Expiration</a></li>
+    <li><a href="#redundancy--optimization">Redundancy &amp; Optimization</a></li>
+    <li><a href="#backup-behavior">Backup Behavior</a></li>
+    <li><a href="#audit-logging">Audit Logging</a></li>
+    <li><a href="#database-schema">Database Schema</a></li>
+  </ol>
+</nav>
+
+<h2 id="requirements">Requirements</h2>
+
+<ul>
+  <li>Python 3.8+</li>
+  <li><code>python-dotenv</code></li>
+  <li><code>colorama</code></li>
+</ul>
+
+<p>Install dependencies:</p>
+
+<pre><code>pip install python-dotenv colorama</code></pre>
+
+<hr>
+
+<h2 id="installation">Installation</h2>
+
+<p>No installation required. Run directly:</p>
+
+<pre><code>python BlockListManager.py &lt;command&gt; [target] [options]</code></pre>
+
+<hr>
+
+<h2 id="directory-structure">Directory Structure</h2>
+
+<p>The tool creates the following directories automatically on first run, relative to the current working directory:</p>
+
+<pre><code>database/    SQLite database file
+logs/        Audit log (audit.log)
+rules/       Exported rule files
+reports/     CSV audit reports
+backups/     Pre-export backups of rule files</code></pre>
+
+<p><code>config.env</code> is loaded from the same directory as <code>BlockListManager.py</code>.</p>
+
+<hr>
+
+<h2 id="configuration">Configuration</h2>
+
+<p>Create a <code>config.env</code> file next to <code>BlockListManager.py</code>. All values are optional and fall back to defaults if not set.</p>
+
+<table>
+  <thead>
+    <tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>DENY_ONLY</code></td><td>TRUE/FALSE</td><td>TRUE</td><td>When TRUE, the <code>allow</code> command is disabled.</td></tr>
+    <tr><td><code>DEFAULT_EXPIRY</code></td><td>integer</td><td>30</td><td>Default expiration in days when the operator presses Enter at the prompt.</td></tr>
+    <tr><td><code>FILE_OUTPUT_DENY</code></td><td>path</td><td><code>rules/block.txt</code></td><td>Output path for the exported BLOCK list.</td></tr>
+    <tr><td><code>FILE_OUTPUT_ALLOW</code></td><td>path</td><td><code>rules/allow.txt</code></td><td>Output path for the exported ALLOW list.</td></tr>
+  </tbody>
+</table>
+
+<p>Example <code>config.env</code>:</p>
+
+<pre><code>DENY_ONLY=TRUE
+DEFAULT_EXPIRY=30
+FILE_OUTPUT_DENY=/etc/firewall/blocklist.txt
+FILE_OUTPUT_ALLOW=/etc/firewall/allowlist.txt</code></pre>
+
+<hr>
+
+<h2 id="whitelist">Whitelist</h2>
+
+<p>If a <code>whitelist.txt</code> file exists in the working directory, any <code>block</code> or <code>deny</code> command targeting an IP or range that overlaps a whitelisted entry will be rejected immediately — no prompts, no database write.</p>
+
+<h3>File Format</h3>
+
+<ul>
+  <li>One IP, CIDR, or dash range per line</li>
+  <li>Lines beginning with <code>#</code> are full-line comments and are ignored</li>
+  <li>Inline comments are supported: everything from <code>#</code> onward is stripped</li>
+  <li>Blank lines are ignored</li>
+  <li>Invalid entries produce a warning and are skipped</li>
+</ul>
+
+<h3>Example <code>whitelist.txt</code></h3>
+
+<pre><code># Core infrastructure — never block
+203.0.113.0/24      # NOC uplink
+198.51.100.10       # monitoring host
+2001:db8::/32       # IPv6 management range
+10.0.0.1-10.0.0.50  # internal management range</code></pre>
+
+<hr>
+
+<h2 id="usage">Usage</h2>
+
+<pre><code>python BlockListManager.py COMMAND [TARGET] [OPTIONS]</code></pre>
+
+<h3 id="block--deny">block / deny</h3>
+
+<p>Add a BLOCK rule for the given IP, CIDR, or dash range.</p>
+
+<pre><code>python BlockListManager.py block &lt;target&gt;
+python BlockListManager.py deny &lt;target&gt;</code></pre>
+
+<p><code>deny</code> is an alias for <code>block</code>. Behavior is identical.</p>
+
+<p><strong>Behavior:</strong></p>
+<ul>
+  <li>If the target is already covered by an existing BLOCK rule, the operator is offered the option to extend its expiration. No duplicate is added.</li>
+  <li>If the target overlaps an existing ALLOW rule, the operator is prompted to confirm the exception before proceeding.</li>
+  <li>If the target overlaps a whitelisted network, the entry is rejected immediately.</li>
+  <li>For dash ranges that expand to multiple CIDRs, each is processed individually.</li>
+</ul>
+
+<p><strong>Prompts:</strong> Incident/Ticket ID, operator comment, expiration.</p>
+
+<h3 id="allow">allow</h3>
+
+<p>Add an ALLOW rule for the given IP, CIDR, or dash range.</p>
+
+<pre><code>python BlockListManager.py allow &lt;target&gt;</code></pre>
+
+<p>Behavior mirrors <code>block</code> but for the ALLOW policy. May be disabled via <code>DENY_ONLY=TRUE</code> in <code>config.env</code>.</p>
+
+<p><strong>Prompts:</strong> Incident/Ticket ID, operator comment, expiration.</p>
+
+<h3 id="remove">remove</h3>
+
+<p>Remove an active BLOCK or ALLOW rule.</p>
+
+<pre><code>python BlockListManager.py remove &lt;target&gt;</code></pre>
+
+<p><strong>Behavior:</strong></p>
+<ul>
+  <li>If the target is not found as an exact active rule, the tool checks whether it is covered by a broader rule and hints the operator.</li>
+  <li>If both a BLOCK and ALLOW rule exist for the same CIDR, the operator is presented with a list and asked to choose which to remove.</li>
+  <li>When a covering rule is removed, any non-expired child ranges that were marked redundant under it are automatically reactivated under the new incident ID.</li>
+</ul>
+
+<p><strong>Prompts:</strong> Confirmation, Incident/Ticket ID, operator comment.</p>
+
+<h3 id="search">search</h3>
+
+<p>Look up whether an IP address is covered by any active rule.</p>
+
+<pre><code>python BlockListManager.py search &lt;target&gt;</code></pre>
+
+<p>Displays policy, CIDR range, author, creation date, expiration, and incident ID for every matching rule. Does not require a globally routable address (useful for searching RFC 1918 or other special-use addresses).</p>
+
+<h3 id="export">export</h3>
+
+<p>Export all active, non-redundant, non-expired rules to flat text files.</p>
+
+<pre><code>python BlockListManager.py export</code></pre>
+
+<p>Output paths are determined by <code>FILE_OUTPUT_DENY</code> and <code>FILE_OUTPUT_ALLOW</code> in <code>config.env</code>. If not configured, defaults to:</p>
+
+<pre><code>rules/block.txt
+rules/allow.txt</code></pre>
+
+<p>If an output file already exists, it is backed up to <code>backups/</code> with a timestamp suffix before being overwritten. The backup is verified via SHA-256 hash. If the backup fails integrity verification, the operator is prompted to confirm overwriting without a backup.</p>
+
+<h3 id="list">list</h3>
+
+<p>Print all active, non-redundant, non-expired rules to the screen.</p>
+
+<pre><code>python BlockListManager.py list</code></pre>
+
+<p>Output is a formatted table showing policy, CIDR, creation date, expiration, author, and incident ID.</p>
+
+<h3 id="report">report</h3>
+
+<p>Generate a full CSV audit export of every record in the database.</p>
+
+<pre><code>python BlockListManager.py report</code></pre>
+
+<p>Includes all records — active, redundant, and expired. Output is written to:</p>
+
+<pre><code>reports/ip_audit_report_YYYYMMDD_HHMMSS.csv</code></pre>
+
+<p>Columns: IP/CIDR, Policy, Version, Incident ID, Author, Created, Expires, Is Redundant.</p>
+
+<h3 id="purge">purge</h3>
+
+<p>Permanently delete redundant (swallowed) records from the database.</p>
+
+<pre><code>python BlockListManager.py purge [--days N]</code></pre>
+
+<table>
+  <thead>
+    <tr><th>Option</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>--days N</code></td><td>Only purge redundant records older than N days. Omit to purge all redundant records.</td></tr>
+  </tbody>
+</table>
+
+<p>Redundant records are created automatically when a broader range supersedes a narrower one. They are kept by default so the full history is preserved in reports. Use <code>purge</code> to reclaim space.</p>
+
+<p><strong>Prompts:</strong> Confirmation before proceeding.</p>
+
+<hr>
+
+<h2 id="input-formats">Input Formats</h2>
+
+<table>
+  <thead>
+    <tr><th>Format</th><th>Example</th><th>Treated as</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Plain IPv4</td><td><code>1.2.3.4</code></td><td><code>/32</code> host rule</td></tr>
+    <tr><td>IPv4 CIDR</td><td><code>1.2.3.0/24</code></td><td>Exact CIDR</td></tr>
+    <tr><td>Plain IPv6</td><td><code>2001:db8::1</code></td><td><code>/64</code> network rule</td></tr>
+    <tr><td>IPv6 CIDR</td><td><code>2001:db8::/32</code></td><td>Exact CIDR</td></tr>
+    <tr><td>IPv4 dash range</td><td><code>1.2.3.10-1.2.3.20</code></td><td>Expanded to minimal CIDRs</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Notes:</strong></p>
+<ul>
+  <li>Plain IPv4 addresses are automatically treated as <code>/32</code>.</li>
+  <li>Plain IPv6 addresses are automatically expanded to <code>/64</code>. Use <code>/128</code> to target a single host.</li>
+  <li>Dash ranges are expanded into the minimal set of CIDRs needed to cover the range.</li>
+  <li>Only globally routable addresses are accepted for <code>block</code>, <code>allow</code>, and <code>remove</code>. The <code>search</code> command accepts any address.</li>
+  <li>Dash ranges that cross a <code>/24</code> boundary trigger a confirmation prompt showing the full expansion before proceeding.</li>
+</ul>
+
+<hr>
+
+<h2 id="expiration">Expiration</h2>
+
+<p>All rules can optionally expire. At the expiration prompt:</p>
+
+<table>
+  <thead>
+    <tr><th>Input</th><th>Result</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Enter</td><td>Use the default (from <code>DEFAULT_EXPIRY</code> in config, default 30 days)</td></tr>
+    <tr><td><code>0</code></td><td>Rule never expires (indefinite)</td></tr>
+    <tr><td><code>N</code> (integer &gt; 0)</td><td>Rule expires N days from now</td></tr>
+  </tbody>
+</table>
+
+<p>Expired rules are excluded from <code>search</code>, <code>list</code>, <code>export</code>, and child-range restoration on <code>remove</code>. They remain in the database and appear in <code>report</code>.</p>
+
+<p>When a matching rule already exists, the operator is offered the option to extend the expiration:</p>
+
+<table>
+  <thead>
+    <tr><th>Input</th><th>Result</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Enter</td><td>Keep current expiration unchanged</td></tr>
+    <tr><td><code>0</code></td><td>Make the rule indefinite</td></tr>
+    <tr><td><code>N</code> (integer &gt; 0)</td><td>Add N days to the current expiration</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="redundancy--optimization">Redundancy &amp; Optimization</h2>
+
+<p>When a new rule is added that covers one or more existing rules of the same policy, those smaller rules are automatically marked <code>is_redundant = 1</code>. This prevents duplicate matches and keeps exports clean.</p>
+
+<p>When a covering rule is removed, non-expired redundant child ranges of the same policy are automatically reactivated (<code>is_redundant = 0</code>) and assigned the incident ID from the removal operation.</p>
+
+<p>Redundant records are retained in the database for audit purposes until explicitly removed with <code>purge</code>.</p>
+
+<hr>
+
+<h2 id="backup-behavior">Backup Behavior</h2>
+
+<p>Before overwriting an export file, the tool:</p>
+
+<ol>
+  <li>Computes the SHA-256 hash of the existing file.</li>
+  <li>Copies the file to <code>backups/&lt;filename&gt;-YYYY-DD-MM_HH_MM_SS.txt</code>.</li>
+  <li>Computes the SHA-256 hash of the backup.</li>
+  <li>Compares the two hashes.</li>
+</ol>
+
+<p>If the hashes match, the export proceeds and the backup is confirmed with <code>(verified)</code>.</p>
+
+<p>If the hashes do not match (copy corruption), the backup is deleted and the operator is prompted:</p>
+
+<pre><code>[!] INTEGRITY ISSUE: couldn't back up existing block.txt.
+Overwrite without backup? (y/n):</code></pre>
+
+<p>Answering <code>n</code> skips the export for that policy. The other policy continues normally.</p>
+
+<hr>
+
+<h2 id="audit-logging">Audit Logging</h2>
+
+<p>All write operations are recorded in two places:</p>
+
+<p><strong>SQLite <code>audit_history</code> table</strong> — queryable record of every ADD, REMOVE, EXTEND, and PURGE event, including the operator, target CIDR, incident ID, comment, and timestamp.</p>
+
+<p><strong><code>logs/audit.log</code></strong> — append-only flat log file in the format:</p>
+
+<pre><code>YYYY-MM-DD HH:MM:SS [INFO] USER: &lt;username&gt; | ACTION: &lt;event&gt; | TARGET: &lt;cidr&gt; | ID: &lt;incident&gt; | EXPIRES: &lt;date&gt; | COMMENT: &lt;text&gt;</code></pre>
+
+<hr>
+
+<h2 id="database-schema">Database Schema</h2>
+
+<h3><code>ip_ranges</code></h3>
+
+<table>
+  <thead>
+    <tr><th>Column</th><th>Type</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>id</code></td><td>INTEGER</td><td>Primary key</td></tr>
+    <tr><td><code>original_input</code></td><td>TEXT</td><td>The raw input string provided by the operator</td></tr>
+    <tr><td><code>cidr</code></td><td>TEXT</td><td>Normalized CIDR notation</td></tr>
+    <tr><td><code>version</code></td><td>INTEGER</td><td>IP version (4 or 6)</td></tr>
+    <tr><td><code>start_blob</code></td><td>BLOB</td><td>Packed start address (for range queries)</td></tr>
+    <tr><td><code>end_blob</code></td><td>BLOB</td><td>Packed end address (for range queries)</td></tr>
+    <tr><td><code>incident_id</code></td><td>TEXT</td><td>Incident or ticket ID provided at time of entry</td></tr>
+    <tr><td><code>is_redundant</code></td><td>INTEGER</td><td>1 if superseded by a broader rule, 0 if active</td></tr>
+    <tr><td><code>policy</code></td><td>TEXT</td><td><code>BLOCK</code> or <code>ALLOW</code></td></tr>
+    <tr><td><code>created_by</code></td><td>TEXT</td><td>OS username of the operator who created the rule</td></tr>
+    <tr><td><code>created_at</code></td><td>TIMESTAMP</td><td>Creation timestamp</td></tr>
+    <tr><td><code>expires_at</code></td><td>TIMESTAMP</td><td>Expiration timestamp, or NULL for indefinite</td></tr>
+  </tbody>
+</table>
+
+<h3><code>audit_history</code></h3>
+
+<table>
+  <thead>
+    <tr><th>Column</th><th>Type</th><th>Description</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>id</code></td><td>INTEGER</td><td>Primary key</td></tr>
+    <tr><td><code>event_type</code></td><td>TEXT</td><td><code>ADDED_BLOCK</code>, <code>ADDED_ALLOW</code>, <code>REMOVED</code>, <code>EXTENDED</code>, <code>PURGE</code></td></tr>
+    <tr><td><code>target_cidr</code></td><td>TEXT</td><td>The CIDR or description that was affected</td></tr>
+    <tr><td><code>user</code></td><td>TEXT</td><td>OS username of the operator</td></tr>
+    <tr><td><code>incident_id</code></td><td>TEXT</td><td>Incident or ticket ID</td></tr>
+    <tr><td><code>comment</code></td><td>TEXT</td><td>Operator comment</td></tr>
+    <tr><td><code>expires_at</code></td><td>TIMESTAMP</td><td>Expiration at time of event</td></tr>
+    <tr><td><code>timestamp</code></td><td>TIMESTAMP</td><td>When the event occurred</td></tr>
+  </tbody>
+</table>
+
+</body>
+</html>
