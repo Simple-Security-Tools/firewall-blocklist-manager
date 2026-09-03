@@ -10,7 +10,7 @@ perimeter and Conditional Access cannot drift apart. Publishing is deliberately
 separate from rule management: additional targets can be added without changing
 how rules are written, reviewed or audited.
 
-Full command reference: [DOCUMENTATION.md](DOCUMENTATION.md), or run
+Full command reference: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md), or run
 `python BlocklistManager.py --help`.
 
 ## Quickstart
@@ -94,4 +94,4 @@ python -m pytest tests/ -q
   rejecting them.
 - Plain IPv4 is treated as `/32`, plain IPv6 as `/64`.
 - Known gaps against Entra Named Location limits are tracked in
-  [TODO.txt](TODO.txt).
+  [docs/TODO.txt](docs/TODO.txt).
