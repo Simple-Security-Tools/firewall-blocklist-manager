@@ -23,4 +23,4 @@ if [ ! -x "$py" ]; then
   echo "  create it with: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
   exit 1
 fi
-exec "$py" "$here/BlocklistManager.py" "$@"
+exec "$py" "$here/src/BlocklistManager.py" "$@"

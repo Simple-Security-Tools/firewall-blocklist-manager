@@ -10,11 +10,11 @@ import tempfile
 import logging
 from pathlib import Path
 
-# Ensure the project root is on the path — this file's parent is tests/, which
-# does not contain the module. Without going up one level the import resolves
-# only because `python -m pytest` happens to put the caller's cwd on sys.path,
-# so the suite passes from the repository root and fails from anywhere else.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# The module lives in src/, so put that on the path. Relying on the caller's
+# cwd instead would make the suite pass from the repository root and fail from
+# anywhere else, which is how this was subtly broken before.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ROOT, "src"))
 
 from BlocklistManager import IPDatabase
 
@@ -33,7 +33,7 @@ def make_db():
          patch.object(IPDatabase, "_load_whitelist", return_value=[]):
         db = IPDatabase.__new__(IPDatabase)
         # Tests that touch the filesystem chdir into a scratch directory, so
-        # anchor to cwd rather than the real install next to BlocklistManager.py.
+        # anchor to cwd rather than the real project root above src/.
         db.base_dir = Path(".")
         db.config = {"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}
         db.deny_mode = False
@@ -767,10 +767,16 @@ class TestBaseDir(unittest.TestCase):
         db.close()
         self.assertEqual(loaded, ["9.9.9.9/32"])
 
-    def test_defaults_to_the_scripts_own_directory(self):
+    def test_defaults_to_the_project_root_not_the_src_dir(self):
+        # The module lives in src/, so base_dir must be its PARENT. Anchoring to
+        # the module's own directory would bury data/, logs/ and config.txt
+        # inside src/ — an install that silently finds no config and no rules.
         import BlocklistManager as B
         self.assertEqual(IPDatabase.__init__.__defaults__[1], None)
-        expected = Path(B.__file__).resolve().parent
+        module_dir = Path(B.__file__).resolve().parent
+        expected = module_dir.parent
+        self.assertEqual(module_dir.name, "src",
+                         "module is expected to live in src/; update this test if it moves")
         with patch.object(IPDatabase, "_create_table"), \
              patch.object(IPDatabase, "_load_whitelist", return_value=[]), \
              patch.object(IPDatabase, "reactivate_uncovered", return_value=[]), \

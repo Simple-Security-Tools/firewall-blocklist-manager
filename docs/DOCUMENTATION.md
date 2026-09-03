@@ -50,7 +50,7 @@ pip install python-dotenv colorama
 No installation required. Run directly:
 
 ```
-python BlocklistManager.py <command> [target] [options]
+python src/BlocklistManager.py <command> [target] [options]
 ```
 
 ---
@@ -155,7 +155,7 @@ If a `whitelist.txt` file exists in the working directory, any `block` or `deny`
 ## Usage
 
 ```
-python BlocklistManager.py COMMAND [TARGET] [OPTIONS]
+python src/BlocklistManager.py COMMAND [TARGET] [OPTIONS]
 ```
 
 ### block / deny
@@ -163,8 +163,8 @@ python BlocklistManager.py COMMAND [TARGET] [OPTIONS]
 Add a BLOCK rule for the given IP, CIDR, or dash range.
 
 ```
-python BlocklistManager.py block <target>
-python BlocklistManager.py deny <target>
+python src/BlocklistManager.py block <target>
+python src/BlocklistManager.py deny <target>
 ```
 
 `deny` is an alias for `block`. Behavior is identical.
@@ -184,7 +184,7 @@ python BlocklistManager.py deny <target>
 Add an ALLOW rule for the given IP, CIDR, or dash range.
 
 ```
-python BlocklistManager.py allow <target>
+python src/BlocklistManager.py allow <target>
 ```
 
 Behavior mirrors `block` but for the ALLOW policy. May be disabled via `DENY_ONLY=TRUE` in `config.txt`.
@@ -198,7 +198,7 @@ Behavior mirrors `block` but for the ALLOW policy. May be disabled via `DENY_ONL
 Remove an active BLOCK or ALLOW rule.
 
 ```
-python BlocklistManager.py remove <target>
+python src/BlocklistManager.py remove <target>
 ```
 
 **Behavior:**
@@ -215,7 +215,7 @@ python BlocklistManager.py remove <target>
 Look up whether an IP address is covered by any active rule.
 
 ```
-python BlocklistManager.py search <target>
+python src/BlocklistManager.py search <target>
 ```
 
 Displays policy, CIDR range, author, creation date, expiration, and incident ID for every matching rule. Does not require a globally routable address (useful for searching RFC 1918 or other special-use addresses).
@@ -227,7 +227,7 @@ Displays policy, CIDR range, author, creation date, expiration, and incident ID 
 Export all active, non-redundant, non-expired rules to flat text files.
 
 ```
-python BlocklistManager.py export
+python src/BlocklistManager.py export
 ```
 
 Output paths are determined by `FILE_OUTPUT_DENY` and `FILE_OUTPUT_ALLOW` in `config.txt`. If not configured, defaults to:
@@ -246,7 +246,7 @@ If an output file already exists, it is backed up to `backups/` with a timestamp
 Print all active, non-redundant, non-expired rules to the screen.
 
 ```
-python BlocklistManager.py list
+python src/BlocklistManager.py list
 ```
 
 Output is a formatted table showing policy, CIDR, creation date, expiration, author, and incident ID.
@@ -258,7 +258,7 @@ Output is a formatted table showing policy, CIDR, creation date, expiration, aut
 Generate a full CSV audit export of every record in the database.
 
 ```
-python BlocklistManager.py report
+python src/BlocklistManager.py report
 ```
 
 Includes all records — active, redundant, and expired. Output is written to:
@@ -276,7 +276,7 @@ Columns: IP/CIDR, Policy, Version, Incident ID, Author, Created, Expires, Is Red
 Permanently delete redundant (swallowed) records from the database.
 
 ```
-python BlocklistManager.py purge [--days N]
+python src/BlocklistManager.py purge [--days N]
 ```
 
 | Option    | Description                                              |

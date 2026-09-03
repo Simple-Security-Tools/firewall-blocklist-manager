@@ -33,11 +33,15 @@ def ok(msg):
 class IPDatabase:
     def __init__(self, db_name="ip_manager.db", base_dir=None):
         # Everything this tool owns — database, logs, rules, reports, backups,
-        # config and whitelist — lives next to the script, not in whatever
+        # config and whitelist — lives at the project root, not in whatever
         # directory it happens to be invoked from. Otherwise running it from
         # elsewhere silently creates a second, empty database and finds no
         # whitelist, which is exactly what a launcher on PATH would do.
-        self.base_dir = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+        #
+        # The module sits in src/, so the root is one level UP from this file.
+        # Using the file's own directory would bury data/, logs/ and config.txt
+        # inside src/ — a working install that finds no config and no rules.
+        self.base_dir = Path(base_dir) if base_dir else Path(__file__).resolve().parent.parent
 
         config_path = self.base_dir / "config.txt"
         if not config_path.exists():
@@ -1076,7 +1080,7 @@ def main():
     custom_help = """
 BlocklistManager — Firewall Blocklist Manager
 =============================================
-Usage: python BlocklistManager.py COMMAND [TARGET] [OPTIONS]
+Usage: python src/BlocklistManager.py COMMAND [TARGET] [OPTIONS]
 
 One authoritative IP blocklist for hybrid environments, enforced at the network
 edge and in cloud identity from a single source of truth. Rules are held in a
@@ -1216,18 +1220,18 @@ accept IPs and CIDRs.
 
 --- Examples ---
 
-  python BlocklistManager.py block 45.33.32.156
-  python BlocklistManager.py block 45.33.32.0/24
-  python BlocklistManager.py block 45.33.32.15-45.33.32.20
-  python BlocklistManager.py allow 45.33.32.9
-  python BlocklistManager.py remove 45.33.32.156
-  python BlocklistManager.py remove 45.33.32.50/32  (carves out of a covering rule)
-  python BlocklistManager.py search 45.33.32.156
-  python BlocklistManager.py purge --days 90
-  python BlocklistManager.py export
-  python BlocklistManager.py sync
-  python BlocklistManager.py list
-  python BlocklistManager.py report
+  python src/BlocklistManager.py block 45.33.32.156
+  python src/BlocklistManager.py block 45.33.32.0/24
+  python src/BlocklistManager.py block 45.33.32.15-45.33.32.20
+  python src/BlocklistManager.py allow 45.33.32.9
+  python src/BlocklistManager.py remove 45.33.32.156
+  python src/BlocklistManager.py remove 45.33.32.50/32  (carves out of a covering rule)
+  python src/BlocklistManager.py search 45.33.32.156
+  python src/BlocklistManager.py purge --days 90
+  python src/BlocklistManager.py export
+  python src/BlocklistManager.py sync
+  python src/BlocklistManager.py list
+  python src/BlocklistManager.py report
     """
 
     # 2. Add add_help=False to stop argparse from auto-generating help

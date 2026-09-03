@@ -11,7 +11,7 @@ separate from rule management: additional targets can be added without changing
 how rules are written, reviewed or audited.
 
 Full command reference: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md), or run
-`python BlocklistManager.py --help`.
+`python src/BlocklistManager.py --help`.
 
 ## Quickstart
 
@@ -50,7 +50,7 @@ keeps its database, logs, rules, reports, backups, config and whitelist there â€
 never in the directory you happen to be standing in. So `blocklist list` from
 anywhere reads the same database, and the whitelist is always enforced.
 
-`python BlocklistManager.py ...` still works if you prefer, as long as you use
+`python src/BlocklistManager.py ...` still works if you prefer, as long as you use
 the venv's interpreter (`.venv/bin/python`).
 
 `block`, `allow` and `remove` prompt for an incident/ticket ID, a comment, and
