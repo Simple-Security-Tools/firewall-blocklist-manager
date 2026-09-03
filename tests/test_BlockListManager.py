@@ -601,6 +601,52 @@ class TestBackupName(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# non-routable filtering at publish time
+# ---------------------------------------------------------------------------
+
+class TestRoutableOnly(unittest.TestCase):
+    """
+    RFC1918 and friends must never reach a firewall or a Named Location. Entra
+    accepts them silently rather than rejecting them, so nothing downstream
+    catches the mistake — this is the last line of defence.
+    """
+
+    def setUp(self):
+        self.db = make_db()
+
+    def test_public_addresses_are_kept(self):
+        keep, dropped = self.db._routable_only(["45.33.32.0/24", "1.2.3.4/32", "2001:4860::/32"])
+        self.assertEqual(keep, ["45.33.32.0/24", "1.2.3.4/32", "2001:4860::/32"])
+        self.assertEqual(dropped, [])
+
+    def test_private_and_reserved_are_dropped(self):
+        cidrs = [
+            "192.168.0.0/28",   # RFC1918
+            "10.0.0.0/8",       # RFC1918
+            "172.16.0.0/12",    # RFC1918
+            "127.0.0.1/32",     # loopback
+            "169.254.0.0/16",   # link-local
+            "100.64.0.0/10",    # CGNAT
+            "fc00::/7",         # IPv6 ULA
+            "fe80::/10",        # IPv6 link-local
+        ]
+        keep, dropped = self.db._routable_only(cidrs)
+        self.assertEqual(keep, [])
+        self.assertEqual(dropped, cidrs)
+
+    def test_mixed_list_partitions_and_preserves_order(self):
+        keep, dropped = self.db._routable_only(
+            ["45.33.32.0/24", "192.168.0.0/24", "8.8.8.8/32", "10.1.2.0/24"])
+        self.assertEqual(keep, ["45.33.32.0/24", "8.8.8.8/32"])
+        self.assertEqual(dropped, ["192.168.0.0/24", "10.1.2.0/24"])
+
+    def test_unparseable_entries_are_dropped_not_raised(self):
+        keep, dropped = self.db._routable_only(["45.33.32.0/24", "not-a-cidr"])
+        self.assertEqual(keep, ["45.33.32.0/24"])
+        self.assertEqual(dropped, ["not-a-cidr"])
+
+
+# ---------------------------------------------------------------------------
 # rule breadth guard
 # ---------------------------------------------------------------------------
 

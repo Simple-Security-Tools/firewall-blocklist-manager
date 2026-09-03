@@ -829,10 +829,17 @@ class IPDatabase:
                         warn(f"Skipping export for {p}.")
                         continue
 
+            publishable, dropped = self._routable_only([r['cidr'] for r in rows])
+            if dropped:
+                warn(f"[!] SKIPPED {len(dropped)} non-routable {p} rule(s) — not written to {out_path.name}:")
+                for c in dropped:
+                    warn(f"      {c}")
+                warn("    These are inside your perimeter and cannot match a public source address.")
+
             with open(out_path, "w") as f:
-                for r in rows:
-                    f.write(f"{r['cidr']}\n")
-            print(f"[+] EXPORTED: {len(rows)} rules to {out_path}\n")
+                for c in publishable:
+                    f.write(f"{c}\n")
+            print(f"[+] EXPORTED: {len(publishable)} rules to {out_path}\n")
 
     def sync_named_location(self):
         """Export block list to file, then push CIDRs to the configured Entra Named Location."""
@@ -855,7 +862,13 @@ class IPDatabase:
                                  ORDER BY version ASC, start_blob ASC
                                  """, {'now': now}).fetchall()
 
-        cidrs = [r['cidr'] for r in rows]
+        cidrs, dropped = self._routable_only([r['cidr'] for r in rows])
+        if dropped:
+            warn(f"[!] SKIPPED {len(dropped)} non-routable rule(s) — not sent to Entra:")
+            for c in dropped:
+                warn(f"      {c}")
+            warn("    Entra would accept these silently, but they can never match a")
+            warn("    public source address. Remove them from the database.")
 
         if not cidrs:
             warn("[!] No active BLOCK rules to sync.")
@@ -955,6 +968,27 @@ class IPDatabase:
             err("Aborted — input did not match.")
             return False
         return True
+
+    def _routable_only(self, cidrs):
+        """
+        Splits CIDRs into (publishable, rejected).
+
+        Non-routable space must never reach a firewall or a Named Location. It
+        sits inside the perimeter already, it can never match a public source
+        address, and Entra accepts it silently rather than refusing it — so
+        nothing downstream will catch the mistake. add_entry's callers reject it
+        at entry, but rows predating that check can still be in the database, so
+        it is enforced again here at publish time.
+        """
+        keep, dropped = [], []
+        for c in cidrs:
+            try:
+                net = ipaddress.ip_network(c, strict=False)
+            except ValueError:
+                dropped.append(c)
+                continue
+            (keep if net.is_global else dropped).append(c)
+        return keep, dropped
 
     def _resolve(self, path):
         """Anchors a relative path to the install directory; leaves absolute ones alone."""
@@ -1139,7 +1173,7 @@ accept IPs and CIDRs.
 
   The IPv6 thresholds track the equivalent operational units (a site is a /48,
   a large allocation a /32), so an ordinary /64 host block is unaffected.
-  The guard applies to both block and allow, and --test does not bypass it.
+  The guard applies to both block and allow.
 
 --- Whitelist ---
 
@@ -1188,7 +1222,6 @@ accept IPs and CIDRs.
   python BlockListManager.py sync
   python BlockListManager.py list
   python BlockListManager.py report
-  python BlockListManager.py --test block 192.168.1.0/24  (bypass routability check)
     """
 
     # 2. Add add_help=False to stop argparse from auto-generating help
@@ -1196,7 +1229,6 @@ accept IPs and CIDRs.
 
     # Manually handle -h/--help to print your block
     parser.add_argument("-h", "--help", action="store_true")
-    parser.add_argument("--test", action="store_true", help="Allow non-routable IPs (testing only)")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -1228,8 +1260,9 @@ accept IPs and CIDRs.
             if db.is_input_ip_address(args.target) is False:
                 err("[-] Invalid IP or CIDR")
                 sys.exit(1)
-            if args.command != "search" and not args.test and db.is_ip_address_routable(args.target) is False:
-                err("[-] Non-routable IP")
+            if args.command != "search" and db.is_ip_address_routable(args.target) is False:
+                err("[-] REFUSED: not a globally routable address.")
+                err("    Private, loopback, link-local and reserved ranges are inside your\n    perimeter already; blocking them at the edge or in Conditional Access\n    achieves nothing. Entra accepts them silently, which makes it worse.")
                 sys.exit(1)
 
         def run_add(policy):

@@ -117,8 +117,7 @@ one reflex keystroke away, so the range must be retyped character for character.
 
 The IPv6 thresholds track the equivalent operational units — a site is a `/48`,
 a large allocation a `/32` — so an ordinary `/64` host block never trips the
-guard. The gate applies to both `block` and `allow`, and `--test` does **not**
-bypass it: it relaxes the routability check only.
+guard. The gate applies to both `block` and `allow`.
 
 If a rule genuinely needs to be wider than the refusal threshold, split it into
 permitted blocks. The limits live in `IPDatabase.SIZE_LIMITS`.

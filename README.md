@@ -82,8 +82,10 @@ python -m pytest tests/ -q
 
 ## Notes
 
-- Only globally routable addresses are accepted. Pass `--test` to allow private
-  or reserved ranges when experimenting.
+- Only globally routable addresses are accepted, with no override. Private,
+  loopback, link-local and reserved ranges are refused at entry and filtered
+  again at export and sync, because Entra accepts them silently rather than
+  rejecting them.
 - Plain IPv4 is treated as `/32`, plain IPv6 as `/64`.
 - Known gaps against Entra Named Location limits are tracked in
   [TODO.txt](TODO.txt).
