@@ -1137,7 +1137,10 @@ def main():
     custom_help = """
 BlocklistManager — Firewall Blocklist Manager
 =============================================
-Usage: python src/BlocklistManager.py COMMAND [TARGET] [OPTIONS]
+Usage: blocklist COMMAND [TARGET] [OPTIONS]
+
+Run it through the ./blocklist launcher, which uses the project's own
+interpreter. .venv/bin/python src/BlocklistManager.py works too.
 
 One authoritative IP blocklist for hybrid environments, enforced at the network
 edge and in cloud identity from a single source of truth. Rules are held in a

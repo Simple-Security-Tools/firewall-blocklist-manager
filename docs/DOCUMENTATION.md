@@ -33,9 +33,10 @@ Rules live in a local SQLite database with full audit history, expiration and wh
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - `colorama`
-- `microsoft_graph_helpers` (only needed for `sync`)
+- `microsoft_graph_helpers` (only needed for `sync`, and the reason the floor
+  is 3.10 rather than 3.8)
 
 Install dependencies:
 
