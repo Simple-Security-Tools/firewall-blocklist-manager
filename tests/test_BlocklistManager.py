@@ -628,6 +628,87 @@ class TestCarveOut(unittest.TestCase):
 # _backup_name
 # ---------------------------------------------------------------------------
 
+class TestCarveCommand(unittest.TestCase):
+    """The `carve` command: a direct entry point to the flow `remove` falls into."""
+
+    def setUp(self):
+        self.db = make_db()
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.add_entry("192.168.0.0/24", inc_id="INC001")
+
+    def _cidrs(self, policy):
+        rows = self.db.conn.execute(
+            "SELECT cidr FROM ip_ranges WHERE policy = ? AND is_redundant = 0", (policy,)
+        ).fetchall()
+        return {r["cidr"] for r in rows}
+
+    def test_carve_punches_a_hole_in_the_covering_block(self):
+        with patch("builtins.input", side_effect=["y", "INC002", "exempt host", "y"]), \
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.carve_entry("192.168.0.25")
+
+        blocks = self._cidrs("BLOCK")
+        self.assertNotIn("192.168.0.0/24", blocks)
+        self.assertEqual(self._cidrs("ALLOW"), {"192.168.0.25/32"})
+
+    def test_carve_reaches_the_same_result_as_remove(self):
+        other = make_db()
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            other.add_entry("192.168.0.0/24", inc_id="INC001")
+
+        with patch("builtins.input", side_effect=["y", "INC002", "exempt", "y"]), \
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.carve_entry("192.168.0.25")
+        with patch("builtins.input", side_effect=["y", "INC002", "exempt", "y"]), \
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            other.remove_entry("192.168.0.25")
+
+        def snapshot(db):
+            rows = db.conn.execute(
+                "SELECT cidr, policy FROM ip_ranges WHERE is_redundant = 0").fetchall()
+            return sorted((r["cidr"], r["policy"]) for r in rows)
+
+        self.assertEqual(snapshot(self.db), snapshot(other),
+                         "carve and remove must not drift apart")
+
+    def test_carve_refuses_a_range_that_is_its_own_rule(self):
+        # Nothing broader to carve it out of, so this is a remove, not a carve.
+        with patch("builtins.input") as mock_input:
+            self.db.carve_entry("192.168.0.0/24")
+        mock_input.assert_not_called()
+        self.assertIn("192.168.0.0/24", self._cidrs("BLOCK"))
+
+    def test_carve_reports_when_nothing_covers_the_target(self):
+        with patch("builtins.input") as mock_input:
+            self.db.carve_entry("8.8.8.8")
+        mock_input.assert_not_called()
+        self.assertEqual(self._cidrs("ALLOW"), set())
+
+    def test_declining_the_carve_leaves_everything_alone(self):
+        with patch("builtins.input", side_effect=["n"]):
+            self.db.carve_entry("192.168.0.25")
+        self.assertEqual(self._cidrs("BLOCK"), {"192.168.0.0/24"})
+        self.assertEqual(self._cidrs("ALLOW"), set())
+
+    def test_carve_works_while_deny_only_is_set(self):
+        # DENY_ONLY disables the standalone allow command, not carving.
+        self.db.deny_mode = True
+        with patch("builtins.input", side_effect=["y", "INC002", "exempt", "y"]), \
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.carve_entry("192.168.0.25")
+        self.assertEqual(self._cidrs("ALLOW"), {"192.168.0.25/32"})
+
+    def test_find_covering_rule_prefers_block(self):
+        # Carving out of a BLOCK writes an ALLOW for the same range. If ALLOW
+        # were checked first, a second carve would find that record instead.
+        _, version, start, end, _ = self.db.normalize_cidr("192.168.0.25/32")
+        self.assertEqual(self.db.find_covering_rule(version, start, end)["policy"], "BLOCK")
+
+    def test_find_covering_rule_returns_none_when_uncovered(self):
+        _, version, start, end, _ = self.db.normalize_cidr("8.8.8.8/32")
+        self.assertIsNone(self.db.find_covering_rule(version, start, end))
+
+
 class TestBackupName(unittest.TestCase):
     """Backups lead with the timestamp so a file browser sorts them by age."""
 

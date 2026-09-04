@@ -17,6 +17,7 @@ Rules live in a local SQLite database with full audit history, expiration and wh
    - [block / deny](#block--deny)
    - [allow](#allow)
    - [remove](#remove)
+   - [carve](#carve)
    - [search](#search)
    - [export](#export)
    - [list](#list)
@@ -301,7 +302,8 @@ python src/BlocklistManager.py remove <target>
 
 #### Carve-out
 
-Removing a range that sits inside a broader rule offers to carve it out. The
+Removing a range that sits inside a broader rule offers to carve it out, and
+`carve` goes straight there. The
 covering rule is deleted and replaced by the CIDRs covering everything except
 the carved range, keeping the covering rule's policy and expiration. Carving
 `45.33.32.50` out of a `45.33.32.0/24` block leaves 8 BLOCK rules and a hole.
@@ -364,6 +366,46 @@ blocklist remove 45.33.32.1
 `remove` finds the ALLOW as an exact target and deletes it like any other rule.
 `report` shows every record including expired and redundant ones, which is the
 place to audit what is still on the books.
+
+---
+
+### carve
+
+Punch a hole in a broader rule: carve a range out of whatever covers it.
+
+```
+blocklist carve <target>
+```
+
+This is what you want when an address sits inside a block and you need to let
+it through. `remove` reaches the same place, but only after a `NOT FOUND` error
+that reads like a failure, so `carve` says what you meant.
+
+**Behavior:**
+- Finds the active rule covering the target, checking BLOCK before ALLOW.
+- Shows the replacement CIDRs and asks to confirm before writing anything.
+- Carving out of a BLOCK also writes an ALLOW record for the carved range. See
+  [Carve-out](#carve-out) for what each publishing target receives.
+- Works while `DENY_ONLY` is TRUE. That setting disables the standalone `allow`
+  command, not carving, and a carve-out is the only way an ALLOW entry is
+  created in that mode.
+- If the target is already a rule of its own, there is nothing broader to carve
+  it out of, and the tool points at `remove` instead.
+- If nothing covers the target, the address is already unblocked, and the tool
+  points at `block`.
+
+**Prompts:** Confirmation, Incident/Ticket ID, operator comment, then a second
+confirmation showing the replacement rules.
+
+Attempting `allow` on an address inside a block while `DENY_ONLY` is set names
+this command in the refusal:
+
+```
+[!] ACCESS DENIED: DENY_ONLY_MODE is set, 'allow' is disabled.
+    45.33.32.50/32 is covered by an active BLOCK rule for 45.33.32.0/24.
+    To punch a hole in that rule instead:
+        blocklist carve 45.33.32.50
+```
 
 ---
 

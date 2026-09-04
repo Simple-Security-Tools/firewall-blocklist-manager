@@ -43,7 +43,7 @@ class IPDatabase:
     #: whitelist file, so nothing is ever blocked before an admin has made the
     #: deliberate choice about what must never be blocked. An empty file counts:
     #: it says the decision was made, not skipped.
-    RULE_WRITING_COMMANDS = ("block", "deny", "allow", "remove")
+    RULE_WRITING_COMMANDS = ("block", "deny", "allow", "remove", "carve")
 
     def __init__(self, db_path=None, base_dir=None):
         # Everything this tool owns — database, logs, rules, reports, backups,
@@ -674,6 +674,77 @@ class IPDatabase:
         ok(f"SUCCESS: {net_obj} carved out of {covering_net}. "
            f"{len(remaining)} replacement rules active.{extra}")
 
+    def find_covering_rule(self, version, start, end):
+        """
+        Returns the active rule covering this range, BLOCK first, or None.
+
+        BLOCK first because that is what a carve almost always targets, and
+        because carving out of a BLOCK writes an ALLOW record for the same
+        range. Checking ALLOW first would find that record on a second pass and
+        offer to carve the range out of itself.
+        """
+        for policy in ('BLOCK', 'ALLOW'):
+            row = self._get_covering_rule(version, start, end, policy)
+            if row:
+                return row
+        return None
+
+    def offer_carve(self, net_obj, version, start, end, cidr_val):
+        """
+        Offers to carve this range out of whatever covers it. Returns True if a
+        carve was applied.
+
+        Shared by `carve`, which comes here directly, and `remove`, which lands
+        here when the target is not a rule of its own. One implementation so the
+        two routes cannot drift apart.
+        """
+        covering_row = self.find_covering_rule(version, start, end)
+        if not covering_row:
+            return False
+
+        warn(f"[i] NOTE: {cidr_val} is covered by an active {covering_row['policy']} rule for {covering_row['cidr']}.")
+        if input(f"Carve {cidr_val} out of {covering_row['cidr']}? (y/n): ").strip().lower() != 'y':
+            print("Aborted.")
+            return False
+
+        inc_id, comment = self.parse_removal_inputs()
+        self._carve_out(net_obj, covering_row, inc_id, comment)
+        return True
+
+    def carve_entry(self, ip_input):
+        """
+        Carve a range out of the rule covering it, as its own command.
+
+        This is what an operator wants when they mean "let this one address
+        through" and the address sits inside a broader block. Reaching it via
+        `remove` works too, but only after a NOT FOUND error that reads like a
+        failure.
+        """
+        try:
+            net_obj, version, start, end, cidr_val = self.normalize_cidr(ip_input)
+
+            exact = self.conn.execute("""
+                                      SELECT policy FROM ip_ranges
+                                      WHERE version = :version
+                                        AND start_blob = :start_blob
+                                        AND end_blob = :end_blob
+                                        AND is_redundant = 0
+                                      """, {'version': version, 'start_blob': start,
+                                            'end_blob': end}).fetchall()
+            if exact:
+                policies = ", ".join(sorted({r['policy'] for r in exact}))
+                err(f"\n[-] {cidr_val} is already a rule of its own ({policies}), not part of a broader one.")
+                err(f"    Nothing to carve it out of. To delete it:  blocklist remove {ip_input}")
+                return
+
+            if not self.offer_carve(net_obj, version, start, end, cidr_val):
+                if not self.find_covering_rule(version, start, end):
+                    err(f"\n[-] No active rule covers {cidr_val}, so there is no hole to punch.")
+                    err(f"    That address is already unblocked. To block it:  blocklist block {ip_input}")
+
+        except Exception as e:
+            err(f"[-] ERROR during carve: {e}")
+
     def remove_entry(self, ip_input):
         try:
             # Normalize input to find the correct record
@@ -696,18 +767,7 @@ class IPDatabase:
 
             if not targets:
                 err(f"\n[-] NOT FOUND: No active record matching '{cidr_val}' exists.")
-                for policy_check in ('BLOCK', 'ALLOW'):
-                    covering_row = self._get_covering_rule(version, start, end, policy_check)
-                    if covering_row:
-                        warn(f"[i] NOTE: {cidr_val} is covered by an active {policy_check} rule for {covering_row['cidr']}.")
-                        if input(f"Carve {cidr_val} out of {covering_row['cidr']}? (y/n): ").strip().lower() == 'y':
-                            inc_id, comment = self.parse_removal_inputs()
-                            self._carve_out(net_obj, covering_row, inc_id, comment)
-                            # One carve per removal. Carving out of the BLOCK
-                            # writes an ALLOW record for the same range, so
-                            # continuing the loop would find that record and
-                            # offer to carve the range out of itself.
-                            return
+                self.offer_carve(net_obj, version, start, end, cidr_val)
                 return
 
             # If multiple policies match, show them and ask which to remove
@@ -1240,6 +1300,15 @@ accept IPs and CIDRs.
                       current-state view. Remove it explicitly to clear it.
                       Prompts for: Incident/Ticket ID, comment.
 
+  carve <target>      Punch a hole in a broader rule: carve the target out of
+                      whatever covers it. This is the command for "let this
+                      address through" when it sits inside a block. remove
+                      reaches the same place, but only after a NOT FOUND error.
+                      Carving out of a BLOCK also writes an ALLOW record.
+                      Works while DENY_ONLY is TRUE: that setting disables the
+                      standalone allow command, not carving.
+                      Prompts for: Incident/Ticket ID, comment, confirmation.
+
   search <target>     Look up whether an IP address is covered by any active
                       rule in the database. Displays policy, range, author,
                       creation date, expiration, and incident ID for every
@@ -1369,7 +1438,7 @@ accept IPs and CIDRs.
     subparsers = parser.add_subparsers(dest="command")
 
     # Setup the commands (keeping argument logic intact)
-    for cmd in ["block", "deny", "allow", "search", "remove"]:
+    for cmd in ["block", "deny", "allow", "search", "remove", "carve"]:
         p = subparsers.add_parser(cmd)
         p.add_argument("target")
 
@@ -1392,7 +1461,7 @@ accept IPs and CIDRs.
 
     try:
         # Validation
-        if args.command in ["block", "deny", "allow", "search", "remove"]:
+        if args.command in ["block", "deny", "allow", "search", "remove", "carve"]:
             if db.is_input_ip_address(args.target) is False:
                 err("[-] Invalid IP or CIDR")
                 sys.exit(1)
@@ -1418,11 +1487,24 @@ accept IPs and CIDRs.
             sys.exit(1)
 
         def run_add(policy):
-            # Refuse before prompting for incident ID, comment and expiration —
+            # Refuse before prompting for incident ID, comment and expiration.
             # add_entry() also enforces this, but only after the operator has
             # already typed all three.
             if db.deny_mode and policy == 'ALLOW':
-                err("[!] ACCESS DENIED: The system is in DENY_ONLY_MODE. 'allow' commands are disabled.")
+                err("[!] ACCESS DENIED: DENY_ONLY_MODE is set, 'allow' is disabled.")
+                # Someone allowing an address inside a block usually wants a
+                # hole in that block, which carve does and DENY_ONLY permits.
+                # Saying only that the door is locked sends them away without
+                # mentioning the other door.
+                try:
+                    _, version, start, end, cidr_val = db.normalize_cidr(args.target)
+                    covering = db.find_covering_rule(version, start, end)
+                except Exception:
+                    covering = None
+                if covering:
+                    err(f"    {cidr_val} is covered by an active {covering['policy']} rule for {covering['cidr']}.")
+                    err(f"    To punch a hole in that rule instead:")
+                    err(f"        blocklist carve {args.target}")
                 sys.exit(1)
 
             targets, start_ip, end_ip = db.expand_range(args.target)
@@ -1490,6 +1572,8 @@ accept IPs and CIDRs.
             run_add('BLOCK')
         elif args.command == "allow":
             run_add('ALLOW')
+        elif args.command == "carve":
+            db.carve_entry(args.target)
         elif args.command == "remove":
             db.remove_entry(args.target)
         elif args.command == "purge":
