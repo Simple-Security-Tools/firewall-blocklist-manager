@@ -5,6 +5,11 @@ __pycache__/
 .pytest_cache/
 
 # Runtime state and output — never commit
+# DATABASE_PATH is configurable, so match database files anywhere in the tree,
+# not just the default directory.
+*.sqlite
+*.sqlite3
+*.db
 backups/
 data/
 # pre-rename location; kept so an old database is never committed

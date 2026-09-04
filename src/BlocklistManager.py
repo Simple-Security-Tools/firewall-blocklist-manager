@@ -31,7 +31,10 @@ def ok(msg):
 
 
 class IPDatabase:
-    def __init__(self, db_name="ip_manager.db", base_dir=None):
+    #: Where the database lives when DATABASE_PATH is not set in config.txt.
+    DEFAULT_DATABASE_PATH = "data/BlocklistManager.sqlite"
+
+    def __init__(self, db_path=None, base_dir=None):
         # Everything this tool owns — database, logs, rules, reports, backups,
         # config and whitelist — lives at the project root, not in whatever
         # directory it happens to be invoked from. Otherwise running it from
@@ -51,7 +54,7 @@ class IPDatabase:
         self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
 
         # Ensure required directories exist
-        for d in ("data", "logs", "rules", "reports", "backups"):
+        for d in ("logs", "rules", "reports", "backups"):
             (self.base_dir / d).mkdir(exist_ok=True)
 
         # Setup Python Logging Module
@@ -64,9 +67,27 @@ class IPDatabase:
             handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] USER: %(user)s | %(message)s'))
             self.logger.addHandler(handler)
 
-        # Initialize Database
-        db_path = self.base_dir / "data" / db_name
-        self.conn = sqlite3.connect(db_path)
+        # Initialize Database. DATABASE_PATH may be relative (anchored to the
+        # project root) or absolute, so a deployment can put the database under
+        # /var/lib or /opt without moving anything else. The parent directory is
+        # created if missing, including intermediate levels.
+        # Strip before falling back, so DATABASE_PATH set to blank or whitespace
+        # uses the default rather than resolving to the project root itself.
+        configured = str(db_path or self.config.get("DATABASE_PATH") or "").strip()
+        self.db_path = self._resolve(configured or self.DEFAULT_DATABASE_PATH)
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            err(f"[!] Cannot create database directory {self.db_path.parent}: {e}")
+            err(f"    Check DATABASE_PATH in config.txt, or the permissions on that path.")
+            sys.exit(1)
+
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+        except sqlite3.OperationalError as e:
+            err(f"[!] Cannot open database at {self.db_path}: {e}")
+            err(f"    Check DATABASE_PATH in config.txt, or the permissions on that file.")
+            sys.exit(1)
         self.conn.row_factory = sqlite3.Row
         self._create_table()
         self.whitelist = self._load_whitelist()
@@ -1208,6 +1229,10 @@ accept IPs and CIDRs.
 
   DENY_ONLY                    TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
   DEFAULT_EXPIRY                days       Default expiration if operator presses Enter (default 30)
+  DATABASE_PATH                 path       SQLite database location. Relative to the project
+                                           root, or absolute for /var, /opt etc. Missing
+                                           directories are created.
+                                           (default data/BlocklistManager.sqlite)
   MAX_EXPIRY                    days       Optional cap on rule lifetime. When set, longer
                                            expirations and indefinite (0) rules are refused.
                                            Unset by default.

@@ -753,7 +753,7 @@ class TestBaseDir(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(self.elsewhere, d)),
                              f"{d} was created in the caller's cwd")
         self.assertTrue(os.path.exists(
-            os.path.join(self.install, "data", "ip_manager.db")))
+            os.path.join(self.install, "data", "BlocklistManager.sqlite")))
 
     def test_whitelist_is_read_from_install_dir(self):
         # A whitelist in the cwd must be ignored; the install's is what counts.
@@ -786,6 +786,61 @@ class TestBaseDir(unittest.TestCase):
             db = IPDatabase.__new__(IPDatabase)
             IPDatabase.__init__(db)
             self.assertEqual(db.base_dir, expected)
+
+    def _db_with_config(self, cfg):
+        """Builds a real IPDatabase with config.txt contents faked out."""
+        with patch("BlocklistManager.dotenv_values", return_value=cfg):
+            return IPDatabase(base_dir=self.install)
+
+    def test_database_path_defaults_under_the_project_root(self):
+        db = self._db_with_config({})
+        try:
+            self.assertEqual(db.db_path,
+                             Path(self.install) / "data" / "BlocklistManager.sqlite")
+            self.assertTrue(db.db_path.exists())
+        finally:
+            db.close()
+
+    def test_database_path_relative_is_anchored_to_the_project_root(self):
+        db = self._db_with_config({"DATABASE_PATH": "db/custom.sqlite"})
+        try:
+            self.assertEqual(db.db_path, Path(self.install) / "db" / "custom.sqlite")
+            self.assertTrue(db.db_path.exists())
+        finally:
+            db.close()
+
+    def test_database_path_absolute_is_used_as_given(self):
+        # The /var, /opt case: the database sits entirely outside the install.
+        outside = tempfile.mkdtemp()
+        try:
+            target = os.path.join(outside, "lib", "blocklist", "bl.sqlite")
+            db = self._db_with_config({"DATABASE_PATH": target})
+            try:
+                self.assertEqual(db.db_path, Path(target))
+                self.assertTrue(db.db_path.exists(), "missing parents should be created")
+                self.assertFalse((Path(self.install) / "data").exists(),
+                                 "must not also create the default location")
+            finally:
+                db.close()
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+    def test_blank_database_path_falls_back_to_the_default(self):
+        # A key left empty or whitespace must not resolve to the project root.
+        for value in ("", "   "):
+            db = self._db_with_config({"DATABASE_PATH": value})
+            try:
+                self.assertEqual(db.db_path,
+                                 Path(self.install) / "data" / "BlocklistManager.sqlite",
+                                 f"{value!r} should fall back to the default")
+            finally:
+                db.close()
+
+    def test_unwritable_database_path_exits_with_a_message(self):
+        with patch("BlocklistManager.err") as mock_err:
+            with self.assertRaises(SystemExit):
+                self._db_with_config({"DATABASE_PATH": "/proc/nope/blocklist.sqlite"})
+        self.assertTrue(mock_err.called, "should explain the failure, not traceback")
 
     def test_relative_output_paths_anchor_to_install(self):
         db = IPDatabase(base_dir=self.install)

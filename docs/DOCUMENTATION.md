@@ -60,7 +60,7 @@ python src/BlocklistManager.py <command> [target] [options]
 The tool creates the following directories automatically on first run, relative to the current working directory:
 
 ```
-data/        SQLite database file
+data/        SQLite database file (see DATABASE_PATH)
 logs/        Audit log (audit.log)
 rules/       Exported rule files
 reports/     CSV audit reports
@@ -79,6 +79,7 @@ Create a `config.txt` file next to `BlocklistManager.py`. All values are optiona
 |-------------------|-----------|---------|-----------------------------------------------------------------------------|
 | `DENY_ONLY`       | TRUE/FALSE | TRUE   | When TRUE, the `allow` command is disabled.                                 |
 | `DEFAULT_EXPIRY`  | integer   | 30      | Default expiration in days when the operator presses Enter at the prompt.   |
+| `DATABASE_PATH`   | path      | `data/BlocklistManager.sqlite` | Where the SQLite database lives. Relative paths resolve against the project root; absolute paths are used as given. Missing directories are created. |
 | `MAX_EXPIRY`      | integer   | unset   | Optional cap on rule lifetime. When set, longer expirations and indefinite (`0`) rules are refused. |
 | `FILE_OUTPUT_DENY` | path     | `rules/block.txt` | Output path for the exported BLOCK list.                       |
 | `FILE_OUTPUT_ALLOW`| path     | `rules/allow.txt` | Output path for the exported ALLOW list.                       |

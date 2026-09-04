@@ -14,6 +14,13 @@ DEFAULT_EXPIRY=30
 # rules, which is the default.
 #MAX_EXPIRY=32
 
+# Where the SQLite database lives. Relative paths are resolved against the
+# project root; absolute paths are used as given, so the database can sit under
+# /var/lib or /opt on a shared install. Missing directories are created.
+# Defaults to data/BlocklistManager.sqlite when unset.
+#   DATABASE_PATH=/var/lib/blocklist-manager/BlocklistManager.sqlite
+#DATABASE_PATH=data/BlocklistManager.sqlite
+
 # Export destinations. Anything under rules/ is gitignored.
 FILE_OUTPUT_DENY=rules/palo-blocks.txt
 FILE_OUTPUT_ALLOW=rules/palo-allows.txt
