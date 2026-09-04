@@ -173,6 +173,23 @@ portal will be wiped on the next run. The previous state is written to
 If the permission or consent is missing, `sync` exits after the file export
 with the required permission named in the error.
 
+#### When there are no rules to publish
+
+Entra will not accept a Named Location with no entries, so an empty rule set
+cannot be published as nothing. `sync` publishes `192.0.2.0/24` instead, which
+is RFC 5737 documentation space: not globally routable, so no real client can
+ever fall inside it, and the location enforces nothing.
+
+This matters because the alternative is worse. Skipping the call leaves the
+previous list in force, so Entra goes on blocking ranges that expired weeks
+ago while `list` shows nothing at all to explain why. A partner gets locked out
+of the tenant and there is no record on either side pointing at the cause.
+
+Nothing needs to undo it. `sync` replaces the entire `ipRanges` collection, so
+the next run carrying real rules removes the placeholder on its own. Seeing
+`192.0.2.0/24` alone in the portal means exactly one thing: this location is
+currently enforcing nothing.
+
 ---
 
 ## Rule Breadth

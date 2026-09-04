@@ -13,7 +13,11 @@ to stay aligned with microsoft conditional access policy named locations:
    the covering rule's expiry, and stays put if the surrounding blocks are
    removed by hand. See "Lifetime of the ALLOW record" in DOCUMENTATION.md.
 
-5) Sync does nothing when every rule has expired. The list is empty, so it bails
-   before calling Graph and Entra keeps enforcing the last list it was given.
-   Entra rejects an empty Named Location, so it cannot simply push nothing.
-   Decide what should happen: warn harder, or leave a single placeholder CIDR.
+5) DONE - sync publishes a placeholder when no rules are active. It used to
+   bail before calling Graph, so Entra kept enforcing the last list it was
+   given while the tool reported no active rules: a partner locked out, and
+   list showing nothing to explain why. Entra rejects an empty Named Location,
+   so the empty state is published as 192.0.2.0/24, RFC 5737 documentation
+   space that is not globally routable and matches nobody. No wipe step is
+   needed to undo it, since the PATCH replaces the whole collection and the
+   next sync carrying real rules removes it.

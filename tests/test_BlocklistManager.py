@@ -1339,11 +1339,9 @@ class TestSyncNamedLocation(unittest.TestCase):
     @patch("BlocklistManager.update_named_location", return_value=True)
     @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
     @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
-    def test_all_rules_expired_leaves_the_location_untouched(self, mock_token, mock_get_loc, mock_update):
-        # Documents a real gap rather than approving of it. When every rule has
-        # expired the sync bails out early and never calls Graph, so Entra keeps
-        # enforcing the last list it was given. Entra will not accept an empty
-        # Named Location, which is why it bails, but the operator is only warned.
+    def test_all_rules_expired_clears_the_location(self, mock_token, mock_get_loc, mock_update):
+        # The case that used to leave Entra enforcing a stale list forever: a
+        # partner locked out, and `list` showing nothing to explain why.
         past = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
         self.db.conn.execute("UPDATE ip_ranges SET expires_at = ?", (past,))
         self.db.conn.commit()
@@ -1351,7 +1349,30 @@ class TestSyncNamedLocation(unittest.TestCase):
         with patch.object(self.db, "export_lists"), patch("BlocklistManager.warn"):
             self.db.sync_named_location()
 
-        mock_update.assert_not_called()
+        mock_update.assert_called_once()
+        _, kwargs = mock_update.call_args
+        self.assertEqual(kwargs["values"], [IPDatabase.EMPTY_LIST_PLACEHOLDER])
+
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
+    def test_the_placeholder_is_replaced_once_rules_return(self, mock_token, mock_get_loc, mock_update):
+        # No wipe step is needed. The PATCH replaces the whole collection, so a
+        # sync carrying real rules removes the placeholder by itself.
+        past = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        self.db.conn.execute("UPDATE ip_ranges SET expires_at = ?", (past,))
+        self.db.conn.commit()
+        with patch.object(self.db, "export_lists"), patch("BlocklistManager.warn"):
+            self.db.sync_named_location()
+
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.add_entry("5.6.7.8/32", inc_id="INC009")
+        with patch.object(self.db, "export_lists"):
+            self.db.sync_named_location()
+
+        _, kwargs = mock_update.call_args
+        self.assertEqual(kwargs["values"], ["5.6.7.8/32"])
+        self.assertNotIn(IPDatabase.EMPTY_LIST_PLACEHOLDER, kwargs["values"])
 
     @patch("BlocklistManager.update_named_location", return_value=False)
     @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123"})
@@ -1367,15 +1388,27 @@ class TestSyncNamedLocation(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 self.db.sync_named_location()
 
-    def test_no_active_block_rules_skips_sync(self):
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
+    def test_no_active_block_rules_publishes_the_placeholder(self, mock_token, mock_get_loc, mock_update):
+        # Skipping the call would leave the old list in force while the tool
+        # reported no active rules. Entra rejects an empty Named Location, so
+        # the empty state is published as a range that matches nobody.
         self.db.conn.execute("DELETE FROM ip_ranges")
         self.db.conn.commit()
-        with patch.object(self.db, "export_lists"), \
-             patch("BlocklistManager.warn") as mock_warn, \
-             patch("BlocklistManager.get_bearer_token") as mock_token:
+        with patch.object(self.db, "export_lists"), patch("BlocklistManager.warn"):
             self.db.sync_named_location()
-        mock_warn.assert_called()
-        mock_token.assert_not_called()
+
+        mock_update.assert_called_once()
+        _, kwargs = mock_update.call_args
+        self.assertEqual(kwargs["values"], [IPDatabase.EMPTY_LIST_PLACEHOLDER])
+
+    def test_the_placeholder_can_never_match_a_real_client(self):
+        # The whole basis for using it. RFC 5737 documentation space is not
+        # globally routable, so no public source address can fall inside it.
+        net = ipaddress.ip_network(IPDatabase.EMPTY_LIST_PLACEHOLDER)
+        self.assertFalse(net.is_global)
 
     @patch("BlocklistManager.update_named_location", return_value=True)
     @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})

@@ -34,6 +34,13 @@ class IPDatabase:
     #: Where the database lives when DATABASE_PATH is not set in config.txt.
     DEFAULT_DATABASE_PATH = "data/BlocklistManager.sqlite"
 
+    #: Pushed to the Named Location when no rules are active. Entra refuses a
+    #: location with no entries, so an empty rule set cannot be published as
+    #: nothing. TEST-NET-1 (RFC 5737) is reserved for documentation and can
+    #: never be a real source address, so it matches nobody. The next sync with
+    #: real rules replaces the whole collection and it disappears on its own.
+    EMPTY_LIST_PLACEHOLDER = "192.0.2.0/24"
+
     #: Where the whitelist lives when WHITELIST_PATH is not set. It sits beside
     #: config.txt rather than in data/, because it is hand-edited operator input
     #: and not state the tool rewrites.
@@ -1034,9 +1041,17 @@ class IPDatabase:
             warn("    Entra would accept these silently, but they can never match a")
             warn("    public source address. Remove them from the database.")
 
-        if not cidrs:
-            warn("[!] No active BLOCK rules to sync.")
-            return
+        placeholder_only = not cidrs
+        if placeholder_only:
+            # Bailing here used to leave the previous list in force. The tool
+            # then reported no active rules while Entra went on enforcing the
+            # old ones, with nothing on either side saying so. Publishing the
+            # placeholder makes the empty state real.
+            warn("[!] No active BLOCK rules. Publishing the placeholder instead.")
+            warn(f"    Entra will not accept a Named Location with no entries, so it gets")
+            warn(f"    {self.EMPTY_LIST_PLACEHOLDER} (RFC 5737 documentation space), which matches nobody.")
+            warn("    Nothing is enforced by this location until rules are added and synced.")
+            cidrs = [self.EMPTY_LIST_PLACEHOLDER]
 
         try:
             token = get_bearer_token(
@@ -1072,8 +1087,14 @@ class IPDatabase:
         )
 
         if success:
-            print(f"[+] EXPORTED: {len(cidrs)} rules to Named Location {location_id}\n")
-            self._log_event("SYNC", f"{len(cidrs)} CIDRs -> Named Location {location_id}")
+            if placeholder_only:
+                ok(f"CLEARED: Named Location {location_id} now holds only "
+                   f"{self.EMPTY_LIST_PLACEHOLDER} and enforces nothing.\n")
+                self._log_event("SYNC_CLEARED",
+                                f"placeholder {self.EMPTY_LIST_PLACEHOLDER} -> Named Location {location_id}")
+            else:
+                print(f"[+] EXPORTED: {len(cidrs)} rules to Named Location {location_id}\n")
+                self._log_event("SYNC", f"{len(cidrs)} CIDRs -> Named Location {location_id}")
         else:
             err("[!] Named Location update failed. File export completed but Entra was not updated.")
             err("    Most often this is permissions. The app registration needs the Graph")
