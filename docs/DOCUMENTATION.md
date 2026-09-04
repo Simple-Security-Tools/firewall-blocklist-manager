@@ -138,6 +138,38 @@ rather inject `SECRET` from a vault than write it to disk.
 A syntax error is fatal: the tool reports the file and line number and exits
 rather than running with a silently misread configuration.
 
+### Entra setup for `sync`
+
+`sync` authenticates as an application, with no user context, so it needs an
+Entra app registration:
+
+1. Register an application in Entra ID and note its **Application (client) ID**
+   and your **Directory (tenant) ID**.
+2. Under **API permissions**, add both Microsoft Graph **application**
+   permissions: `Policy.Read.All` and `Policy.ReadWrite.ConditionalAccess`.
+   Microsoft lists both as required to update a Named Location: the read is
+   used to fetch current state for the backup, and the write to replace the
+   ranges. Application permissions cannot be granted by a user, so a Global
+   Administrator or Privileged Role Administrator must click **Grant admin
+   consent** afterwards.
+3. Under **Certificates & secrets**, create a client secret and copy the value
+   immediately. Entra shows it once.
+4. Put the tenant ID, client ID and secret into `config.txt` as `TENANT_ID`,
+   `CLIENT_ID` and `SECRET`.
+
+The Named Location must already exist. Entra will not accept one with no
+entries, so create it by hand with a single placeholder CIDR, then open it and
+copy the UUID from the address bar into `BLOCKLIST_NAMED_LOCATION_ID`.
+
+`sync` is authoritative, not additive. It sends the full list of active BLOCK
+rules and Graph replaces the entire `ipRanges` collection, so anything not in
+the database is removed from the Named Location. Entries added by hand in the
+portal will be wiped on the next run. The previous state is written to
+`backups/` as JSON first.
+
+If the permission or consent is missing, `sync` exits after the file export
+with the required permission named in the error.
+
 ---
 
 ## Rule Breadth

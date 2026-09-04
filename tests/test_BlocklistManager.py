@@ -1109,6 +1109,44 @@ class TestSyncNamedLocation(unittest.TestCase):
         mock_warn.assert_called()
         mock_update.assert_called_once()
 
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
+    def test_expired_rules_are_dropped_on_next_sync(self, mock_token, mock_get_loc, mock_update):
+        # The PATCH replaces the whole ipRanges collection, so anything left out
+        # of the pushed list is removed from the Named Location. An expired rule
+        # is left out, which is how expiry reaches Entra at all.
+        with patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.add_entry("9.9.9.9/32", inc_id="INC002")
+        past = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        self.db.conn.execute(
+            "UPDATE ip_ranges SET expires_at = ? WHERE cidr = ?", (past, "9.9.9.9/32"))
+        self.db.conn.commit()
+
+        with patch.object(self.db, "export_lists"):
+            self.db.sync_named_location()
+
+        _, kwargs = mock_update.call_args
+        self.assertEqual(kwargs["values"], ["1.2.3.4/32"])
+        self.assertNotIn("9.9.9.9/32", kwargs["values"])
+
+    @patch("BlocklistManager.update_named_location", return_value=True)
+    @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123", "ipRanges": []})
+    @patch("BlocklistManager.get_bearer_token", return_value="fake-token")
+    def test_all_rules_expired_leaves_the_location_untouched(self, mock_token, mock_get_loc, mock_update):
+        # Documents a real gap rather than approving of it. When every rule has
+        # expired the sync bails out early and never calls Graph, so Entra keeps
+        # enforcing the last list it was given. Entra will not accept an empty
+        # Named Location, which is why it bails, but the operator is only warned.
+        past = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        self.db.conn.execute("UPDATE ip_ranges SET expires_at = ?", (past,))
+        self.db.conn.commit()
+
+        with patch.object(self.db, "export_lists"), patch("BlocklistManager.warn"):
+            self.db.sync_named_location()
+
+        mock_update.assert_not_called()
+
     @patch("BlocklistManager.update_named_location", return_value=False)
     @patch("BlocklistManager.get_named_location", return_value={"id": "loc-123"})
     @patch("BlocklistManager.get_bearer_token", return_value="fake-token")

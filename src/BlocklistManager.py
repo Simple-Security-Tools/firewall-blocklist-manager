@@ -876,6 +876,8 @@ class IPDatabase:
         missing = [k for k in required if not self.config.get(k)]
         if missing:
             err(f"[!] Missing required config.txt keys for sync: {', '.join(missing)}")
+            err("    These come from an Entra app registration holding the Graph APPLICATION")
+            err("    permissions Policy.Read.All and Policy.ReadWrite.ConditionalAccess.")
             sys.exit(1)
 
         # Export files first (includes backup logic)
@@ -940,7 +942,11 @@ class IPDatabase:
             print(f"[+] EXPORTED: {len(cidrs)} rules to Named Location {location_id}\n")
             self._log_event("SYNC", f"{len(cidrs)} CIDRs -> Named Location {location_id}")
         else:
-            err(f"[!] Named Location update failed. File export completed but Entra was not updated.")
+            err("[!] Named Location update failed. File export completed but Entra was not updated.")
+            err("    Most often this is permissions. The app registration needs the Graph")
+            err("    APPLICATION permissions Policy.Read.All and")
+            err("    Policy.ReadWrite.ConditionalAccess, with admin consent granted.")
+            err("    The Graph status code is in the error logged just above.")
             sys.exit(1)
 
     @staticmethod
@@ -1250,20 +1256,11 @@ accept IPs and CIDRs.
   SECRET                        string     App registration client secret (required for sync)
   BLOCKLIST_NAMED_LOCATION_ID   string     UUID of the Entra Named Location to update (required for sync)
 
---- Examples ---
-
-  python src/BlocklistManager.py block 45.33.32.156
-  python src/BlocklistManager.py block 45.33.32.0/24
-  python src/BlocklistManager.py block 45.33.32.15-45.33.32.20
-  python src/BlocklistManager.py allow 45.33.32.9
-  python src/BlocklistManager.py remove 45.33.32.156
-  python src/BlocklistManager.py remove 45.33.32.50/32  (carves out of a covering rule)
-  python src/BlocklistManager.py search 45.33.32.156
-  python src/BlocklistManager.py purge --days 90
-  python src/BlocklistManager.py export
-  python src/BlocklistManager.py sync
-  python src/BlocklistManager.py list
-  python src/BlocklistManager.py report
+  sync needs an Entra app registration holding the Microsoft Graph application
+  permissions Policy.Read.All and Policy.ReadWrite.ConditionalAccess, with
+  admin consent granted.
+  It replaces the whole Named Location list, so entries added by hand in the
+  portal are removed on the next run.
     """
 
     # 2. Add add_help=False to stop argparse from auto-generating help
