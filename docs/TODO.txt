@@ -21,3 +21,11 @@ to stay aligned with microsoft conditional access policy named locations:
    space that is not globally routable and matches nobody. No wipe step is
    needed to undo it, since the PATCH replaces the whole collection and the
    next sync carrying real rules removes it.
+
+6) IPv6 sync is broken upstream. microsoft_graph_helpers builds every ipRanges
+   entry as "@odata.type": "#microsoft.graph.iPv4CidrRange", so an IPv6 CIDR
+   goes to Graph mislabelled and should be rejected, failing the whole PATCH.
+   Everything else handles IPv6 correctly, including the block list export, so
+   this only affects sync. Fix belongs in microsoft_graph_helpers: choose the
+   odata type per entry from ipaddress.ip_network(cidr).version. Noted in the
+   README until then. Untested against a live tenant.

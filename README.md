@@ -109,5 +109,10 @@ python -m pytest tests/ -q
   again at export and sync, because Entra accepts them silently rather than
   rejecting them.
 - Plain IPv4 is treated as `/32`, plain IPv6 as `/64`.
+- **IPv6 `sync` is untested and expected to fail.** IPv6 rules are handled
+  correctly everywhere else, including the block list export, but
+  `microsoft_graph_helpers` labels every CIDR it sends to Graph as an IPv4
+  range. An IPv6 rule should therefore be rejected and take the whole sync with
+  it. Use IPv4 rules if you sync to Entra, until that is fixed upstream.
 - Known gaps against Entra Named Location limits are tracked in
   [docs/TODO.txt](docs/TODO.txt).
