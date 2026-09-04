@@ -98,6 +98,7 @@ Create a `config.txt` file in the project root, beside `src/` and not inside it.
 | `TENANT_ID`       | string    | —       | Azure AD tenant ID. Required for `sync`.                                    |
 | `CLIENT_ID`       | string    | —       | App registration client ID. Required for `sync`.                            |
 | `SECRET`          | string    | —       | App registration client secret. Required for `sync`.                        |
+| `WHITELIST_PATH`  | path      | `whitelist.txt` | Where the whitelist lives. Relative paths resolve against the project root; absolute paths are used as given, so it can sit in `/etc` with your other config. |
 | `BLOCKLIST_NAMED_LOCATION_ID` | string | — | UUID of the Entra Named Location to update. Required for `sync`.       |
 
 `config.txt` holds a client secret and is gitignored. Copy `config.txt.example` to `config.txt` and fill it in.
@@ -200,9 +201,26 @@ permitted blocks. The limits live in `IPDatabase.SIZE_LIMITS`.
 
 ## Whitelist
 
-If a `whitelist.txt` file exists in the working directory, any `block` or `deny` command targeting an IP or range that overlaps a whitelisted entry will be rejected immediately — no prompts, no database write. Overlap is checked in both directions: a `/16` that merely contains one whitelisted `/32` is rejected too.
+Any `block` or `deny` command targeting an IP or range that overlaps a
+whitelisted entry is rejected immediately: no prompts, no database write.
+Overlap is checked in both directions, so a `/16` that merely contains one
+whitelisted `/32` is rejected too.
 
-**If `whitelist.txt` does not exist, nothing is protected.** The tool warns on every run until you create it. Copy `whitelist.txt.example` to `whitelist.txt` and replace the placeholder entries with your own infrastructure before adding any rules. `whitelist.txt` is gitignored so each deployment keeps its own.
+**The whitelist file is required.** `block`, `deny`, `allow` and `remove` refuse
+to run until it exists, and exit non-zero. Reading and publishing commands
+(`list`, `search`, `report`, `export`, `sync`) still work without it, since
+those rules were already checked against the whitelist when they were added.
+
+An empty file is accepted. The requirement is not that you have something to
+protect, it is that an administrator consciously decided what must never be
+blocked instead of the question never being asked. Copy
+`whitelist.txt.example` to `whitelist.txt` and edit it, or create it empty if
+you genuinely have nothing to list.
+
+By default it sits in the project root beside `config.txt`. Set `WHITELIST_PATH`
+to move it, including to an absolute path outside the install.
+
+Replace the placeholder entries with your own infrastructure before adding any rules. `whitelist.txt` is gitignored so each deployment keeps its own.
 
 ### File Format
 

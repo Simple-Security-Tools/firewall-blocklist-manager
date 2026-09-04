@@ -28,8 +28,9 @@ the project's own interpreter. Activation only edits `PATH`, and the launcher
 names `.venv/bin/python` directly instead.
 
 Edit `whitelist.txt` before adding any rules. It lists the networks that must
-never be blocked. Until it exists, nothing is protected and the tool warns on
-every run.
+never be blocked. The file is required: `block`, `deny`, `allow` and `remove`
+refuse to run until it exists. An empty file is accepted, since the point is
+that someone decided what must never be blocked rather than never being asked.
 
 Then:
 

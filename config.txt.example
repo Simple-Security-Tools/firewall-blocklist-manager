@@ -30,6 +30,12 @@ DEFAULT_EXPIRY=30
 #   DATABASE_PATH=/var/lib/blocklist-manager/BlocklistManager.sqlite
 #DATABASE_PATH=data/BlocklistManager.sqlite
 
+# Where the whitelist lives. Same rules as DATABASE_PATH: relative paths resolve
+# against the project root, absolute ones are used as given. The file is
+# REQUIRED before any rule can be added, though it may be empty.
+# Defaults to whitelist.txt in the project root.
+#WHITELIST_PATH=whitelist.txt
+
 # Export destinations. Anything under rules/ is gitignored.
 FILE_OUTPUT_DENY=rules/palo-blocks.txt
 FILE_OUTPUT_ALLOW=rules/palo-allows.txt

@@ -792,6 +792,86 @@ class TestBaseDir(unittest.TestCase):
         with patch("BlocklistManager.load_config", return_value=cfg):
             return IPDatabase(base_dir=self.install)
 
+    # --- WHITELIST_PATH ---------------------------------------------------
+
+    def _write_whitelist(self, relpath, body="9.9.9.9/32\n"):
+        target = Path(self.install) / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body)
+        return target
+
+    def test_whitelist_path_defaults_beside_config(self):
+        self._write_whitelist("whitelist.txt")
+        db = self._db_with_config({})
+        try:
+            self.assertEqual(db.whitelist_path, Path(self.install) / "whitelist.txt")
+            self.assertTrue(db.whitelist_exists)
+            self.assertEqual([str(n) for n in db.whitelist], ["9.9.9.9/32"])
+        finally:
+            db.close()
+
+    def test_whitelist_path_relative_is_anchored_to_the_project_root(self):
+        self._write_whitelist("etc/wl.txt")
+        db = self._db_with_config({"WHITELIST_PATH": "etc/wl.txt"})
+        try:
+            self.assertEqual(db.whitelist_path, Path(self.install) / "etc" / "wl.txt")
+            self.assertEqual([str(n) for n in db.whitelist], ["9.9.9.9/32"])
+        finally:
+            db.close()
+
+    def test_whitelist_path_absolute_is_used_as_given(self):
+        # The /etc case: the whitelist sits entirely outside the install.
+        outside = tempfile.mkdtemp()
+        try:
+            target = Path(outside) / "whitelist.txt"
+            target.write_text("8.8.8.8/32\n")
+            db = self._db_with_config({"WHITELIST_PATH": str(target)})
+            try:
+                self.assertEqual(db.whitelist_path, target)
+                self.assertEqual([str(n) for n in db.whitelist], ["8.8.8.8/32"])
+            finally:
+                db.close()
+        finally:
+            shutil.rmtree(outside, ignore_errors=True)
+
+    def test_blank_whitelist_path_falls_back_to_the_default(self):
+        self._write_whitelist("whitelist.txt")
+        db = self._db_with_config({"WHITELIST_PATH": "   "})
+        try:
+            self.assertEqual(db.whitelist_path, Path(self.install) / "whitelist.txt")
+        finally:
+            db.close()
+
+    def test_missing_whitelist_is_recorded_not_fatal_at_construction(self):
+        # Construction still succeeds; the refusal happens per command, so that
+        # list, search, report, export and sync keep working.
+        db = self._db_with_config({})
+        try:
+            self.assertFalse(db.whitelist_exists)
+            self.assertEqual(db.whitelist, [])
+        finally:
+            db.close()
+
+    def test_empty_whitelist_counts_as_present(self):
+        # The whole point of requiring the file: a zero-byte one says the admin
+        # made the decision, rather than never having been asked.
+        self._write_whitelist("whitelist.txt", body="")
+        db = self._db_with_config({})
+        try:
+            self.assertTrue(db.whitelist_exists)
+            self.assertEqual(db.whitelist, [])
+        finally:
+            db.close()
+
+    def test_comments_only_whitelist_counts_as_present(self):
+        self._write_whitelist("whitelist.txt", body="# nothing to protect yet\n\n")
+        db = self._db_with_config({})
+        try:
+            self.assertTrue(db.whitelist_exists)
+            self.assertEqual(db.whitelist, [])
+        finally:
+            db.close()
+
     def test_database_path_defaults_under_the_project_root(self):
         db = self._db_with_config({})
         try:

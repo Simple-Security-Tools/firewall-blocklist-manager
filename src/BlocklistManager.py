@@ -34,6 +34,17 @@ class IPDatabase:
     #: Where the database lives when DATABASE_PATH is not set in config.txt.
     DEFAULT_DATABASE_PATH = "data/BlocklistManager.sqlite"
 
+    #: Where the whitelist lives when WHITELIST_PATH is not set. It sits beside
+    #: config.txt rather than in data/, because it is hand-edited operator input
+    #: and not state the tool rewrites.
+    DEFAULT_WHITELIST_PATH = "whitelist.txt"
+
+    #: Commands that put rules into the database. These refuse to run without a
+    #: whitelist file, so nothing is ever blocked before an admin has made the
+    #: deliberate choice about what must never be blocked. An empty file counts:
+    #: it says the decision was made, not skipped.
+    RULE_WRITING_COMMANDS = ("block", "deny", "allow", "remove")
+
     def __init__(self, db_path=None, base_dir=None):
         # Everything this tool owns — database, logs, rules, reports, backups,
         # config and whitelist — lives at the project root, not in whatever
@@ -94,6 +105,10 @@ class IPDatabase:
             sys.exit(1)
         self.conn.row_factory = sqlite3.Row
         self._create_table()
+        # Set before loading so the attributes exist even if _load_whitelist is
+        # stubbed out, which the test suite does.
+        self.whitelist_path = None
+        self.whitelist_exists = False
         self.whitelist = self._load_whitelist()
 
         # A rule is only redundant for as long as the broader rule that swallowed
@@ -272,13 +287,24 @@ class IPDatabase:
         - Invalid entries are warned about and skipped.
         """
         whitelist = []
-        wl_path = Path(path) if path else self.base_dir / "whitelist.txt"
+        # WHITELIST_PATH works like DATABASE_PATH: relative to the project root,
+        # or absolute so a deployment can keep it under /etc with its other
+        # config. Defaults to whitelist.txt beside config.txt.
+        configured = str(path or self.config.get("WHITELIST_PATH") or "").strip()
+        wl_path = self._resolve(configured or self.DEFAULT_WHITELIST_PATH)
 
-        if not wl_path.exists():
-            # Say so loudly. A missing file silently disables the only guard
-            # against blocking your own infrastructure.
-            warn(f"[!] NO WHITELIST: {wl_path} not found — nothing is protected from being "
-                 f"blocked. Copy whitelist.txt.example to whitelist.txt to enable it.")
+        # Commands that write rules refuse to run without this file. Record
+        # whether it was there so they can check, rather than having them
+        # re-stat the path themselves.
+        self.whitelist_path = wl_path
+        self.whitelist_exists = wl_path.exists()
+
+        # No warning here on purpose. The whitelist only ever gates rule entry,
+        # and those commands now refuse outright with a message that says what
+        # to do about it. Warning again on list or report would be noise on
+        # commands the whitelist does not affect, and a yellow line people learn
+        # to scroll past is one they will also scroll past when it matters.
+        if not self.whitelist_exists:
             return whitelist
 
         with open(wl_path) as f:
@@ -1218,9 +1244,14 @@ accept IPs and CIDRs.
 
 --- Whitelist ---
 
-  If whitelist.txt exists in the working directory, any block/deny command
-  targeting a network that overlaps a whitelisted entry will be rejected
-  immediately — no prompts, no database write.
+  Any block/deny command targeting a network that overlaps a whitelisted entry
+  is rejected immediately: no prompts, no database write.
+
+  The whitelist file is REQUIRED. block, deny, allow and remove refuse to run
+  until it exists; list, search, report, export and sync still work without it.
+  An empty file is accepted. The point is that an admin decided what must
+  never be blocked, not that the list has entries. Its location comes from
+  WHITELIST_PATH, defaulting to whitelist.txt in the project root.
 
   File format:
     - One IP or CIDR per line
@@ -1246,6 +1277,9 @@ accept IPs and CIDRs.
                                            root, or absolute for /var, /opt etc. Missing
                                            directories are created.
                                            (default data/BlocklistManager.sqlite)
+  WHITELIST_PATH                path       Whitelist location. Relative to the project
+                                           root, or absolute for /etc etc.
+                                           (default whitelist.txt)
   MAX_EXPIRY                    days       Optional cap on rule lifetime. When set, longer
                                            expirations and indefinite (0) rules are refused.
                                            Unset by default.
@@ -1303,6 +1337,22 @@ accept IPs and CIDRs.
                 err("[-] REFUSED: not a globally routable address.")
                 err("    Private, loopback, link-local and reserved ranges are inside your\n    perimeter already; blocking them at the edge or in Conditional Access\n    achieves nothing. Entra accepts them silently, which makes it worse.")
                 sys.exit(1)
+
+        # Hard fail rather than warn. The whitelist is the only thing standing
+        # between a typo and blocking your own infrastructure, and an admin who
+        # has not created the file has not yet made that decision. Reading and
+        # publishing still work, since those rules were already vetted on entry.
+        if args.command in IPDatabase.RULE_WRITING_COMMANDS and not db.whitelist_exists:
+            err(f"[!] REFUSED: no whitelist at {db.whitelist_path}")
+            err("    Rules cannot be added or removed until this file exists. It lists the")
+            err("    networks that must never be blocked, and creating it is a deliberate")
+            err("    step, not a default.")
+            err("")
+            err("    cp whitelist.txt.example whitelist.txt   # then edit it")
+            err("")
+            err("    An empty file is accepted if you genuinely have nothing to protect.")
+            err("    Set WHITELIST_PATH in config.txt to keep it somewhere else.")
+            sys.exit(1)
 
         def run_add(policy):
             # Refuse before prompting for incident ID, comment and expiration —
