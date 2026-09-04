@@ -597,11 +597,24 @@ class IPDatabase:
         covering_net = ipaddress.ip_network(covering_row['cidr'])
         remaining = sorted(covering_net.address_exclude(net_obj), key=lambda n: n.network_address)
 
-        print(f"\nResulting BLOCK rules after carving {net_obj} out of {covering_net}:")
+        # Carving out of a BLOCK also writes an ALLOW row for the carved range.
+        # That row is a record, not an instruction: the block list and the Named
+        # Location already express the hole by leaving the range out. It exists
+        # so the allow list shows what was deliberately let through and why,
+        # instead of the exception being visible only as an absence.
+        #
+        # Carving out of an ALLOW gets no such row. Subtracting from a hole does
+        # not create a rule worth publishing.
+        record_allow = covering_row['policy'] == 'BLOCK'
+
+        print(f"\nResulting {covering_row['policy']} rules after carving {net_obj} out of {covering_net}:")
         for r in remaining:
             print(f"  {r}")
+        if record_allow:
+            print(f"\nPlus an ALLOW record for {net_obj}, which will appear in the allow list.")
 
-        if input(f"\nApply ({len(remaining)} replacement rules)? (y/n): ").strip().lower() != 'y':
+        tail = " plus 1 ALLOW record" if record_allow else ""
+        if input(f"\nApply ({len(remaining)} replacement rules{tail})? (y/n): ").strip().lower() != 'y':
             print("Aborted.")
             return
 
@@ -629,8 +642,37 @@ class IPDatabase:
                     'expires_at': covering_row['expires_at'],
                 })
 
+            if record_allow:
+                # Inherits the covering rule's expiry, so the exception cannot
+                # outlive the block it was carved from. Written directly rather
+                # than through add_entry(), which refuses ALLOW under DENY_ONLY:
+                # a carve-out is the one way an ALLOW is created in that mode.
+                _, version, start, end, cidr_val = self.normalize_cidr(str(net_obj))
+                self.conn.execute("""
+                                  INSERT INTO ip_ranges
+                                  (original_input, cidr, version, start_blob, end_blob, incident_id, policy, created_by, created_at, expires_at)
+                                  VALUES (:orig, :cidr, :version, :start_blob, :end_blob, :inc, :policy, :created_by, :created_at, :expires_at)
+                                  """, {
+                    'orig': str(net_obj),
+                    'cidr': cidr_val,
+                    'version': version,
+                    'start_blob': start,
+                    'end_blob': end,
+                    'inc': inc_id,
+                    'policy': 'ALLOW',
+                    'created_by': current_user,
+                    'created_at': created_at,
+                    'expires_at': covering_row['expires_at'],
+                })
+
         self._log_event("CARVED", f"{net_obj} from {covering_net}", inc_id, comment)
-        ok(f"SUCCESS: {net_obj} carved out of {covering_net}. {len(remaining)} replacement rules active.")
+        if record_allow:
+            self._log_event("ADDED_ALLOW", str(net_obj), inc_id,
+                            f"carve-out exception from {covering_net}",
+                            covering_row['expires_at'])
+        extra = " 1 ALLOW record written." if record_allow else ""
+        ok(f"SUCCESS: {net_obj} carved out of {covering_net}. "
+           f"{len(remaining)} replacement rules active.{extra}")
 
     def remove_entry(self, ip_input):
         try:
@@ -661,6 +703,11 @@ class IPDatabase:
                         if input(f"Carve {cidr_val} out of {covering_row['cidr']}? (y/n): ").strip().lower() == 'y':
                             inc_id, comment = self.parse_removal_inputs()
                             self._carve_out(net_obj, covering_row, inc_id, comment)
+                            # One carve per removal. Carving out of the BLOCK
+                            # writes an ALLOW record for the same range, so
+                            # continuing the loop would find that record and
+                            # offer to carve the range out of itself.
+                            return
                 return
 
             # If multiple policies match, show them and ask which to remove
@@ -1178,6 +1225,19 @@ accept IPs and CIDRs.
                       or CIDR. If the removed range was covering smaller
                       (redundant) ranges of the same policy, those child
                       ranges are automatically reactivated.
+                      If the target sits INSIDE a broader rule, offers to carve
+                      it out: the covering rule is replaced by the CIDRs
+                      covering everything else. Carving out of a BLOCK also
+                      writes an ALLOW record for the carved range, which shows
+                      up in the allow list as a record of the exception. The
+                      block list and the Named Location express it by absence,
+                      so nothing depends on rule ordering in your firewall.
+                      Works while DENY_ONLY is TRUE, which is the only way an
+                      ALLOW entry is created in that mode.
+                      The ALLOW record expires with the blocks it was carved
+                      from. Removing those blocks by hand leaves it in place:
+                      the allow list is a record of exceptions granted, not a
+                      current-state view. Remove it explicitly to clear it.
                       Prompts for: Incident/Ticket ID, comment.
 
   search <target>     Look up whether an IP address is covered by any active

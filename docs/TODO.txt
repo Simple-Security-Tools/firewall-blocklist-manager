@@ -4,11 +4,14 @@ to stay aligned with microsoft conditional access policy named locations:
 2) 2000 CIDRs per named location - when exporting or syncing block lists, warn if the list will require more than 1 named location
 3) Note that you cannot create a named location with no entries. You always need 1 entry to initialize it.
 
-4) Allow carve-out while DENY_ONLY is set. Removing a narrower range from inside
-   a covering block currently needs the allow path, which DENY_ONLY disables.
-   The carve-out should be permitted, but the resulting entries must stay
-   internal: no ALLOW list should be written to FILE_OUTPUT_ALLOW while
-   DENY_ONLY is TRUE.
+4) DONE - carve-out subtracts as before AND records an ALLOW for the carved
+   range. Carving worked under DENY_ONLY all along, since remove has no
+   deny_mode gate; what was missing was anything for the allow list to publish.
+   The covering BLOCK is still replaced by the CIDRs around the hole, so the
+   block list and the Named Location are unchanged and no firewall rule
+   ordering is relied on. The ALLOW row is a record of the exception, inherits
+   the covering rule's expiry, and stays put if the surrounding blocks are
+   removed by hand. See "Lifetime of the ALLOW record" in DOCUMENTATION.md.
 
 5) Sync does nothing when every rule has expired. The list is empty, so it bails
    before calling Graph and Entra keeps enforcing the last list it was given.

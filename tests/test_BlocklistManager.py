@@ -531,8 +531,10 @@ class TestCarveOut(unittest.TestCase):
              patch("BlocklistManager.getpass.getuser", return_value="testuser"):
             self.db.remove_entry("192.168.0.25/32")
 
+        # Scoped to BLOCK on purpose. A carve-out also writes an ALLOW record
+        # for the carved range, which would otherwise look like coverage below.
         rows = self.db.conn.execute(
-            "SELECT cidr FROM ip_ranges WHERE is_redundant = 0"
+            "SELECT cidr FROM ip_ranges WHERE is_redundant = 0 AND policy = 'BLOCK'"
         ).fetchall()
         cidrs = {r["cidr"] for r in rows}
 
@@ -553,6 +555,49 @@ class TestCarveOut(unittest.TestCase):
         for ip in sample_ips:
             covered = any(ip in ipaddress.ip_network(c) for c in cidrs)
             self.assertTrue(covered, f"{ip} should still be covered after carve-out")
+
+    def _carve(self, target="192.168.0.25/32"):
+        with patch("builtins.input", side_effect=["y", "INC002", "exempt host", "y"]), \
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.remove_entry(target)
+
+    def test_carve_records_an_allow_for_the_carved_range(self):
+        # The record exists so the allow list shows what was let through. The
+        # block list and the Named Location already express it as an absence.
+        self._carve()
+        rows = self.db.conn.execute(
+            "SELECT cidr, incident_id FROM ip_ranges WHERE policy = 'ALLOW' AND is_redundant = 0"
+        ).fetchall()
+        self.assertEqual([r["cidr"] for r in rows], ["192.168.0.25/32"])
+        self.assertEqual(rows[0]["incident_id"], "INC002")
+
+    def test_carved_allow_inherits_the_covering_rule_expiry(self):
+        # The exception must not outlive the block it was carved from.
+        covering = self.db.conn.execute(
+            "SELECT expires_at FROM ip_ranges WHERE cidr = '192.168.0.0/24'").fetchone()
+        self._carve()
+        allow = self.db.conn.execute(
+            "SELECT expires_at FROM ip_ranges WHERE policy = 'ALLOW'").fetchone()
+        self.assertEqual(allow["expires_at"], covering["expires_at"])
+
+    def test_carve_is_offered_once_and_does_not_recurse(self):
+        # The ALLOW record covers the same range that was just carved. Without
+        # returning after the carve, remove_entry would find its own record and
+        # offer to carve the range out of itself.
+        with patch("builtins.input", side_effect=["y", "INC002", "exempt host", "y"]) as mock_input, \
+             patch("BlocklistManager.getpass.getuser", return_value="testuser"):
+            self.db.remove_entry("192.168.0.25/32")
+        self.assertEqual(mock_input.call_count, 4,
+                         "a second carve was offered after the first completed")
+
+    def test_carve_under_deny_only_still_records_the_allow(self):
+        # add_entry refuses ALLOW in DENY_ONLY mode. A carve-out is the one way
+        # an ALLOW comes into existence there, so it must not hit that gate.
+        self.db.deny_mode = True
+        self._carve()
+        rows = self.db.conn.execute(
+            "SELECT cidr FROM ip_ranges WHERE policy = 'ALLOW'").fetchall()
+        self.assertEqual([r["cidr"] for r in rows], ["192.168.0.25/32"])
 
     def test_carve_declined_at_offer_leaves_parent_intact(self):
         with patch("builtins.input", side_effect=["n"]):

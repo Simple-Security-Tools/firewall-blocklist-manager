@@ -299,6 +299,72 @@ python src/BlocklistManager.py remove <target>
 
 **Prompts:** Confirmation, Incident/Ticket ID, operator comment.
 
+#### Carve-out
+
+Removing a range that sits inside a broader rule offers to carve it out. The
+covering rule is deleted and replaced by the CIDRs covering everything except
+the carved range, keeping the covering rule's policy and expiration. Carving
+`45.33.32.50` out of a `45.33.32.0/24` block leaves 8 BLOCK rules and a hole.
+
+Carving out of a BLOCK also writes an **ALLOW record** for the carved range,
+inheriting the covering rule's expiration so the exception cannot outlive the
+block it came from. It is a record, not an instruction. The three publishing
+targets see it differently:
+
+| Target | What it gets |
+|---|---|
+| Block list (`FILE_OUTPUT_DENY`) | The replacement CIDRs. The carved range is simply absent. |
+| Named Location (`sync`) | The same replacement CIDRs. Entra has no allow concept, and `sync` only ever publishes BLOCK rules. |
+| Allow list (`FILE_OUTPUT_ALLOW`) | The carved range, as a record of what was deliberately let through. |
+
+The allow list is documentation here rather than enforcement: the block list
+and the Named Location already express the exception by leaving the range out.
+Nothing depends on your firewall evaluating a specific allow ahead of a broader
+block.
+
+This works while `DENY_ONLY` is TRUE. The `allow` command stays disabled in
+that mode, so a carve-out is the only way an ALLOW entry comes into existence.
+
+Carving out of an ALLOW rule writes no such record. Subtracting from a hole
+does not produce a rule worth publishing.
+
+Only one carve is offered per `remove`.
+
+##### Lifetime of the ALLOW record
+
+**The allow list is a historical record of exceptions, not a current-state
+view.** Read it as "these ranges were deliberately let through," not as "these
+ranges are currently holes in a live block."
+
+When the carve-out expires it takes the ALLOW record with it, since the record
+inherits the covering rule's expiration and the replacement blocks carry the
+same one. That is the ordinary path and needs no attention.
+
+Removing the replacement blocks by hand is different. The ALLOW record is not
+removed with them, so an allow list can name a range whose surrounding blocks
+are gone:
+
+```
+block list: 0 entries
+allow list: 45.33.32.1/32
+```
+
+This is deliberate. The record is audit evidence that somebody authorised an
+exception, under a specific incident ID, and it does not evaporate because the
+blocks around it were later cleaned up. It also cannot cause harm on its own,
+since nothing enforces the allow list: the block list and the Named Location
+carry the enforcement, and neither mentions the range.
+
+Clean it up by hand when you want it gone:
+
+```
+blocklist remove 45.33.32.1
+```
+
+`remove` finds the ALLOW as an exact target and deletes it like any other rule.
+`report` shows every record including expired and redundant ones, which is the
+place to audit what is still on the books.
+
 ---
 
 ### search
