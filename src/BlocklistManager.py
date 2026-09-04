@@ -17,6 +17,10 @@ from microsoft_graph_helpers import get_bearer_token, get_named_location, update
 from colorama import init, Fore, Back, Style
 init(autoreset=True)
 
+#: Reported by --version and in the --help header. An operator filing a bug
+#: needs to be able to say what they are running.
+__version__ = "1.0.0"
+
 def err(msg):
     """Print an error message in red to stderr."""
     print(Fore.RED + msg, file=sys.stderr)
@@ -1262,9 +1266,9 @@ class IPDatabase:
 
 def main():
     # Custom Help Text Block
-    custom_help = """
-BlocklistManager — Firewall Blocklist Manager
-=============================================
+    custom_help = f"""
+BlocklistManager {__version__} — Firewall Blocklist Manager
+===================================================
 Usage: blocklist COMMAND [TARGET] [OPTIONS]
 
 Run it through the ./blocklist launcher, which uses the project's own
@@ -1419,6 +1423,11 @@ accept IPs and CIDRs.
     198.51.100.10       # monitoring host
     2001:db8::/32       # IPv6 management range
 
+--- Options ---
+
+  -h, --help          Show this help.
+  -V, --version       Print the version and exit.
+
 --- Configuration (config.txt) ---
 
   One KEY=VALUE per line, in the project root. Text after a " #" is a comment.
@@ -1455,6 +1464,7 @@ accept IPs and CIDRs.
 
     # Manually handle -h/--help to print your block
     parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("-V", "--version", action="store_true")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -1472,6 +1482,12 @@ accept IPs and CIDRs.
     purge.add_argument("--days", type=int)
 
     args = parser.parse_args()
+
+    # Answered before the database is opened, so it still works on a broken
+    # install. Version is the first thing anyone is asked for in a bug report.
+    if args.version:
+        print(f"BlocklistManager {__version__}")
+        sys.exit(0)
 
     # Check for help flag OR no command
     if args.help or not args.command:

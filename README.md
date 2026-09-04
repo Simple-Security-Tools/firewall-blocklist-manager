@@ -11,7 +11,21 @@ separate from rule management: additional targets can be added without changing
 how rules are written, reviewed or audited.
 
 Full command reference: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md), or run
-`python src/BlocklistManager.py --help`.
+`./blocklist --help`. `./blocklist --version` reports the version.
+
+## Status
+
+Version 1.0.
+
+1.0 means this does what I built it to do and I consider it finished for my own
+use. It does not mean flawless. It is tested against my environment and nobody
+else's, and I make no promises about yours.
+
+Read the code before you run it. Point `DATABASE_PATH` at a scratch file and
+check the exports by hand before you let a firewall or a Conditional Access
+policy ingest them.
+
+Known gaps are tracked in [docs/TODO.txt](docs/TODO.txt).
 
 ## Quickstart
 
@@ -36,6 +50,7 @@ Then:
 
 ```bash
 ./blocklist block 45.33.32.156
+./blocklist carve 45.33.32.160     # let one address through a broader block
 ./blocklist list
 ./blocklist export
 ```

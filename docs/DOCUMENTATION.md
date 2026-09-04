@@ -52,8 +52,10 @@ pip install -r requirements.txt
 No installation required. Run directly:
 
 ```
-python src/BlocklistManager.py <command> [target] [options]
+./blocklist <command> [target] [options]
 ```
+
+`./blocklist --version` reports the version, and `--help` the full reference.
 
 ---
 
