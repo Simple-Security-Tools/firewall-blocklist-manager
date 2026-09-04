@@ -11,7 +11,7 @@ import shutil
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta
-from dotenv import dotenv_values
+from modules.envfile import ConfigError, load_config
 from microsoft_graph_helpers import get_bearer_token, get_named_location, update_named_location
 
 from colorama import init, Fore, Back, Style
@@ -49,7 +49,11 @@ class IPDatabase:
         config_path = self.base_dir / "config.txt"
         if not config_path.exists():
             warn(f"[!] config.txt not found at {config_path} — using defaults.")
-        self.config = dotenv_values(config_path)
+        try:
+            self.config = load_config(config_path)
+        except ConfigError as e:
+            err(f"[!] Cannot parse config.txt: {e}")
+            sys.exit(1)
 
         self.deny_mode = ( self.config.get("DENY_ONLY", "TRUE").upper().strip() == "TRUE" )
 
@@ -1226,6 +1230,9 @@ accept IPs and CIDRs.
     2001:db8::/32       # IPv6 management range
 
 --- Configuration (config.txt) ---
+
+  One KEY=VALUE per line, in the project root. Text after a " #" is a comment.
+  Quote a value to keep surrounding spaces or to spread it across lines.
 
   DENY_ONLY                    TRUE/FALSE  Disables the allow command when TRUE (default TRUE)
   DEFAULT_EXPIRY                days       Default expiration if operator presses Enter (default 30)

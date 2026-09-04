@@ -34,13 +34,13 @@ Rules live in a local SQLite database with full audit history, expiration and wh
 ## Requirements
 
 - Python 3.8+
-- `python-dotenv`
 - `colorama`
+- `microsoft_graph_helpers` (only needed for `sync`)
 
 Install dependencies:
 
 ```
-pip install python-dotenv colorama
+pip install -r requirements.txt
 ```
 
 ---
@@ -57,7 +57,7 @@ python src/BlocklistManager.py <command> [target] [options]
 
 ## Directory Structure
 
-The tool creates the following directories automatically on first run, relative to the current working directory:
+The tool creates the following directories automatically on first run, relative to the project root:
 
 ```
 data/        SQLite database file (see DATABASE_PATH)
@@ -67,13 +67,25 @@ reports/     CSV audit reports
 backups/     Pre-export backups of rule files
 ```
 
-`config.txt` is loaded from the same directory as `BlocklistManager.py`.
+`config.txt` is loaded from the project root, one level up from `src/`.
+
+Source lives under `src/`:
+
+```
+src/BlocklistManager.py    The tool itself
+src/modules/               Supporting modules
+src/modules/envfile.py     Parser for config.txt
+```
+
+`src/` goes on the import path, so a supporting module is reached as
+`from modules.envfile import load_config`. New helpers go in `src/modules/` and
+are imported from their own file rather than re-exported from the package.
 
 ---
 
 ## Configuration
 
-Create a `config.txt` file next to `BlocklistManager.py`. All values are optional and fall back to defaults if not set.
+Create a `config.txt` file in the project root, beside `src/` and not inside it. All values are optional and fall back to defaults if not set.
 
 | Key               | Type      | Default | Description                                                                 |
 |-------------------|-----------|---------|-----------------------------------------------------------------------------|
@@ -98,6 +110,33 @@ DEFAULT_EXPIRY=30
 FILE_OUTPUT_DENY=/etc/firewall/blocklist.txt
 FILE_OUTPUT_ALLOW=/etc/firewall/allowlist.txt
 ```
+
+### File format
+
+One `KEY=VALUE` per line. Blank lines are ignored, as is anything after a `#`
+that follows whitespace, so `DEFAULT_EXPIRY=30 # days` sets `30` while a secret
+containing `abc#def` keeps its `#`.
+
+Values may be quoted to preserve leading or trailing spaces, and a quoted value
+may span several lines:
+
+```
+SECRET="  padded value  "
+LITERAL='no \n escapes here'
+IDS="11111111-2222-3333-4444-555555555555
+66666666-7777-8888-9999-000000000000"
+```
+
+Double quotes process `\n`, `\t`, `\r`, `\\` and `\"`; single quotes are
+literal. `${VAR}` is **not** expanded. Values are passed through exactly as
+written, since a client secret can legitimately contain a `$` or a brace.
+
+This is the standard env-file format, which means `config.txt` can also be fed
+straight to systemd's `EnvironmentFile=` or `docker --env-file` if you would
+rather inject `SECRET` from a vault than write it to disk.
+
+A syntax error is fatal: the tool reports the file and line number and exits
+rather than running with a silently misread configuration.
 
 ---
 

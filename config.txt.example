@@ -1,5 +1,14 @@
 # Copy this file to config.txt and fill it in. config.txt is gitignored —
 # it holds your client secret, so never commit it.
+#
+# One KEY=VALUE per line. Text after a " #" is a comment. Quote a value to keep
+# leading or trailing spaces, or to spread it over several lines:
+#
+#   SECRET="  padded  "
+#   IDS="first-uuid
+#   second-uuid"
+#
+# ${VAR} is not expanded. Values are used exactly as written.
 
 # Using DENY_ONLY forces the script to only export firewall deny lists
 # which can then be kept in sync with Entra Conditional Access Policy Block Lists

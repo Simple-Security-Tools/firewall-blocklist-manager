@@ -28,7 +28,7 @@ def make_db():
     Returns an IPDatabase instance backed by an in-memory SQLite database,
     with config and whitelist mocked out so no files are needed.
     """
-    with patch("BlocklistManager.dotenv_values", return_value={"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}), \
+    with patch("BlocklistManager.load_config", return_value={"DENY_ONLY": "FALSE", "DEFAULT_EXPIRY": "30"}), \
          patch("BlocklistManager.Path.mkdir"), \
          patch.object(IPDatabase, "_load_whitelist", return_value=[]):
         db = IPDatabase.__new__(IPDatabase)
@@ -789,7 +789,7 @@ class TestBaseDir(unittest.TestCase):
 
     def _db_with_config(self, cfg):
         """Builds a real IPDatabase with config.txt contents faked out."""
-        with patch("BlocklistManager.dotenv_values", return_value=cfg):
+        with patch("BlocklistManager.load_config", return_value=cfg):
             return IPDatabase(base_dir=self.install)
 
     def test_database_path_defaults_under_the_project_root(self):
